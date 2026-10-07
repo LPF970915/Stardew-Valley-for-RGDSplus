@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net6.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../dualscreen/VerticalWorld/ScreenGeometry.cs" Link="ScreenGeometry.cs" />
+    <Compile Include="../../dualscreen/VerticalWorld/DisplayModeState.cs" Link="DisplayModeState.cs" />
+    <Reference Include="Mono.Cecil" HintPath="../bin/.store/ilspycmd/7.2.1.6856/ilspycmd/7.2.1.6856/tools/net6.0/any/Mono.Cecil.dll" />
+  </ItemGroup>
+</Project>

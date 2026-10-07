@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <AssemblyName>VerticalWorld</AssemblyName>
+    <RootNamespace>Rgdsplus.VerticalWorld</RootNamespace>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="0Harmony" HintPath="../../port/stardewvalleymainline/tools/SMAPIBundle/game-root/smapi-internal/0Harmony.dll" Private="false" />
+    <Reference Include="xTile" HintPath="../../port/stardewvalleymainline/gamedata/xTile.dll" Private="false" />
+    <Reference Include="StardewValley.GameData" HintPath="../../port/stardewvalleymainline/gamedata/StardewValley.GameData.dll" Private="false" />
+    <Reference Include="StardewModdingAPI" HintPath="../../port/stardewvalleymainline/tools/SMAPIBundle/game-root/StardewModdingAPI.dll" Private="false" />
+    <Reference Include="Stardew Valley" HintPath="../../port/stardewvalleymainline/gamedata/Stardew Valley.dll" Private="false" />
+    <Reference Include="MonoGame.Framework" HintPath="../../port/stardewvalleymainline/gamedata/MonoGame.Framework.dll" Private="false" />
+  </ItemGroup>
+</Project>

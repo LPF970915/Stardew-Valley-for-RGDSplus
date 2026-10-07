@@ -1,0 +1,9 @@
+{
+  "Name": "RGDSplus Vertical World",
+  "Author": "RGDSplus port",
+  "Version": "0.6.0-reference-v2",
+  "Description": "Select switches between continuous dual-screen world and persistent 4:3 lower-screen pages, without a Start popup.",
+  "UniqueID": "RGDSplus.VerticalWorld",
+  "EntryDll": "VerticalWorld.dll",
+  "MinimumApiVersion": "4.5.2"
+}

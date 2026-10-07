@@ -1,0 +1,287 @@
+using System.Reflection;
+using System.Runtime.Loader;
+
+string root = Path.GetFullPath(args[0]);
+string modPath = Path.Combine(root, "dualscreen/VerticalWorld/bin/Release/net6.0/VerticalWorld.dll");
+string gamePath = Path.Combine(root, "build/analysis/device-game.dll");
+string[] search = {
+    Path.Combine(root, "port/stardewvalleymainline/tools/SMAPIBundle/game-root/smapi-internal"),
+    Path.Combine(root, "port/stardewvalleymainline/tools/SMAPIBundle/game-root"),
+    Path.Combine(root, "port/stardewvalleymainline/gamedata")
+};
+AssemblyLoadContext.Default.Resolving += (context, name) => {
+    if (name.Name == "Stardew Valley") return context.LoadFromAssemblyPath(gamePath);
+    foreach (var dir in search)
+    {
+        string file = Path.Combine(dir, name.Name + ".dll");
+        if (File.Exists(file)) return context.LoadFromAssemblyPath(file);
+    }
+    return null;
+};
+Environment.SetEnvironmentVariable("SDV_DUAL_SCREEN_VERTICAL_WORLD", "1");
+var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(modPath);
+var entry = assembly.GetType("Rgdsplus.VerticalWorld.ModEntry", true);
+string logPath = Path.Combine(root, "build/patch-install-test.log");
+entry.GetField("LogPath", BindingFlags.Static | BindingFlags.NonPublic).SetValue(null, logPath);
+var renderer = assembly.GetType("Rgdsplus.VerticalWorld.VerticalWorldRenderer", true);
+renderer.GetMethod("Install", BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, null);
+if (!(bool)renderer.GetProperty("Enabled", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null))
+    throw new Exception("Patch installation failed: " + File.ReadAllText(logPath));
+Console.WriteLine("PASS: all current Harmony patches installed against the exact device game assembly without starting a game.");
+var gameAssembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(gamePath);
+var gameType = gameAssembly.GetType("StardewValley.Game1", true);
+var optionsType = gameAssembly.GetType("StardewValley.Options", true);
+var gameInstance = System.Runtime.Serialization.FormatterServices.GetUninitializedObject(gameType);
+var options = System.Runtime.Serialization.FormatterServices.GetUninitializedObject(optionsType);
+gameType.GetField("game1").SetValue(null, gameInstance);
+gameType.GetField("instanceOptions").SetValue(gameInstance, options);
+var uiPatches = assembly.GetType("Rgdsplus.VerticalWorld.UiPatches", true);
+foreach (float zoom in new[] { .5f, .75f, 1f, 1.25f, 1.5f })
+foreach (float uiScale in new[] { .75f, 1f, 1.25f, 1.5f })
+{
+    optionsType.GetField("baseZoomLevel").SetValue(options, zoom);
+    optionsType.GetField("baseUIScale").SetValue(options, uiScale);
+    uiPatches.GetMethod("EnsureViewports", BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, null);
+    var viewport = gameType.GetField("uiViewport").GetValue(null);
+    int width = (int)viewport.GetType().GetProperty("Width").GetValue(viewport);
+    int height = (int)viewport.GetType().GetProperty("Height").GetValue(viewport);
+    if (Math.Abs(width * (uiScale * 1024f / 1366f) - 1024) > 1.5 || Math.Abs(height * (uiScale * 1024f / 1366f) - 768) > 1.5)
+        throw new Exception("Patched UI geometry depends on world zoom or exceeds lower panel");
+    if (Math.Abs((float)optionsType.GetProperty("zoomLevel").GetValue(options) - zoom) > .001)
+        throw new Exception("World zoom getter did not retain setting");
+}
+Console.WriteLine("PASS: 20 live patched getter/UI-viewport combinations keep UI independent of world zoom.");
+
+const BindingFlags hiddenStatic = BindingFlags.Static | BindingFlags.NonPublic;
+const BindingFlags hiddenInstance = BindingFlags.Instance | BindingFlags.NonPublic;
+object Blank(Type type) => System.Runtime.Serialization.FormatterServices.GetUninitializedObject(type);
+void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
+var controller = assembly.GetType("Rgdsplus.VerticalWorld.DisplayModeController", true);
+var state = controller.GetField("State", hiddenStatic).GetValue(null);
+state.GetType().GetMethod("TryToggle", hiddenInstance).Invoke(state, new object[] { true });
+gameType.GetField("_gameMode", hiddenStatic).SetValue(null, (byte)3);
+gameType.GetField("instanceGameLocation").SetValue(gameInstance, Blank(gameAssembly.GetType("StardewValley.GameLocation", true)));
+Check((bool)controller.GetProperty("Expanded", hiddenStatic).GetValue(null), "Expanded world context did not activate");
+Check(!(bool)gameType.GetProperty("IsHudDrawn").GetValue(null), "Hidden HUD is still drawn or accepting native HUD input");
+
+var geometry = assembly.GetType("Rgdsplus.VerticalWorld.LowerPanelGeometry", true);
+var tryMap = geometry.GetMethod("TryMap", hiddenStatic);
+int Coordinate(object value, string name) => (int)(value.GetType().GetField(name)?.GetValue(value)
+    ?? value.GetType().GetProperty(name).GetValue(value));
+object[] mapArgs = { 100f, 200f, 1024, 768, null };
+Check((bool)tryMap.Invoke(null, mapArgs), "Local lower-panel touch did not map");
+var mapped = mapArgs[4];
+Check(Coordinate(mapped, "X") == 100 && Coordinate(mapped, "Y") == 200, "Local touch mapping changed coordinates");
+mapArgs = new object[] { 1124f, 200f, 1024, 768, null };
+Check((bool)tryMap.Invoke(null, mapArgs), "Composite lower-panel touch did not map");
+mapped = mapArgs[4];
+Check(Coordinate(mapped, "X") == 100 && Coordinate(mapped, "Y") == 200, "Composite touch mapping changed coordinates");
+mapArgs = new object[] { 2048f, 200f, 1024, 768, null };
+Check(!(bool)tryMap.Invoke(null, mapArgs), "Out-of-range touch was accepted");
+var beforeMode = state.GetType().GetProperty("Mode", hiddenInstance).GetValue(state).ToString();
+state.GetType().GetMethod("TryToggle", hiddenInstance).Invoke(state, new object[] { true });
+state.GetType().GetMethod("TryToggle", hiddenInstance).Invoke(state, new object[] { true });
+var afterMode = state.GetType().GetProperty("Mode", hiddenInstance).GetValue(state).ToString();
+Check(beforeMode == afterMode, "Two accepted Select toggles did not restore the display mode");
+Console.WriteLine("PASS: Select mode state toggles and local/composite lower-panel touch mapping are stable.");
+
+var dashboard = assembly.GetType("Rgdsplus.VerticalWorld.Dashboard", true);
+var preferences = assembly.GetType("Rgdsplus.VerticalWorld.CompanionPreferences", true);
+var currentPreferences = preferences.GetField("Current", hiddenStatic).GetValue(null);
+Check(Math.Abs((float)preferences.GetProperty("UiScale").GetValue(currentPreferences) - 1.5f) < .001,
+    "New installations do not default to 150% UI");
+preferences.GetMethod("ApplyUiScale", hiddenStatic).Invoke(null, null);
+Check(Math.Abs((float)optionsType.GetField("baseUIScale").GetValue(options) - 1.5f) < .001,
+    "Preferred scale was not applied in companion mode");
+state.GetType().GetMethod("TryToggle", hiddenInstance).Invoke(state, new object[] { true });
+preferences.GetMethod("ApplyUiScale", hiddenStatic).Invoke(null, null);
+Check(Math.Abs((float)optionsType.GetField("baseUIScale").GetValue(options) - 1.5f) < .001,
+    "Continuous-world mode lost the 150% baseline");
+preferences.GetMethod("SetUiScale", hiddenStatic).Invoke(null, new object[] { 1.25f });
+preferences.GetMethod("ApplyUiScale", hiddenStatic).Invoke(null, null);
+Check(Math.Abs((float)optionsType.GetField("baseUIScale").GetValue(options) - 1.25f) < .001,
+    "Applying preferences overwrote an explicit UI scale");
+preferences.GetMethod("SetUiScale", hiddenStatic).Invoke(null, new object[] { 1.5f });
+state.GetType().GetMethod("TryToggle", hiddenInstance).Invoke(state, new object[] { true });
+foreach (float scale in new[] { .75f, 1f, 1.25f, 1.5f })
+{
+    optionsType.GetField("baseUIScale").SetValue(options, scale);
+    uiPatches.GetMethod("EnsureViewports", hiddenStatic).Invoke(null, null);
+    var viewport = gameType.GetField("uiViewport").GetValue(null);
+    int width = (int)viewport.GetType().GetProperty("Width").GetValue(viewport);
+    int height = (int)viewport.GetType().GetProperty("Height").GetValue(viewport);
+    for (int active = 0; active < 12; active++)
+    {
+        dashboard.GetMethod("Reveal", hiddenStatic).Invoke(null, new object[] { active });
+        int rightEdge=0, visible=0;
+        for(int page=0;page<12;page++)
+        {
+            var rect=dashboard.GetMethod("NavBounds",hiddenStatic).Invoke(null,new object[]{page});
+            if(Coordinate(rect,"Width")==0)continue;
+            Check(Coordinate(rect,"X")>=rightEdge && Coordinate(rect,"Right")<=width && Coordinate(rect,"Bottom")<=height*90/768,
+                "Three-tab rail overlapped or escaped its header");
+            rightEdge=Coordinate(rect,"Right");visible++;
+        }
+        Check(visible==3,"Rail must show exactly three pages");
+        var activeRect=dashboard.GetMethod("NavBounds",hiddenStatic).Invoke(null,new object[]{active});
+        Check(Coordinate(activeRect,"Width")>0,"Selected tab is outside visible rail");
+    }
+    foreach (var region in new[] { ("InventoryBounds", 36), ("ToolbarBounds", 12) })
+    {
+        for (int slot = 0; slot < region.Item2; slot++)
+        {
+            var rect = dashboard.GetMethod(region.Item1, hiddenStatic).Invoke(null, new object[] { slot });
+            int x = Coordinate(rect, "X"), y = Coordinate(rect, "Y");
+            int right = Coordinate(rect, "Right"), bottom = Coordinate(rect, "Bottom");
+            Check(x >= 0 && y >= 0 && right <= width && bottom <= height, region.Item1 + " clipped at UI " + scale);
+            object[] touch = { (x + right) * 512f / width, (y + bottom) * 384f / height, width, height, null };
+            Check((bool)tryMap.Invoke(null, touch), "Slot center touch was rejected");
+            var contains = rect.GetType().GetMethod("Contains", new[] { typeof(int), typeof(int) });
+            Check((bool)contains.Invoke(rect, new object[] { Coordinate(touch[4], "X"), Coordinate(touch[4], "Y") }), "Slot draw/hit mapping diverged");
+            var origin = dashboard.GetMethod("ItemIconOrigin", hiddenStatic).Invoke(null, new[] { rect });
+            float originX = (float)origin.GetType().GetField("X").GetValue(origin);
+            float originY = (float)origin.GetType().GetField("Y").GetValue(origin);
+            float iconScale = (float)dashboard.GetMethod("ItemIconScale", hiddenStatic).Invoke(null, new[] { rect, (object).9f });
+            Check(Math.Abs(originX + 32 - (x + right) / 2f) < .001 && Math.Abs(originY + 32 - (y + bottom) / 2f) < .001,
+                "Native item center shifted out of its slot at UI " + scale);
+            Check(64 * iconScale <= Math.Min(right - x, bottom - y), "Item sprite exceeds slot at UI " + scale);
+        }
+    }
+    for(int row=0;row<2;row++)
+    {
+        var label=dashboard.GetMethod("HeaderMeterLabel",hiddenStatic).Invoke(null,new object[]{row});
+        var bar=dashboard.GetMethod("HeaderMeterBar",hiddenStatic).Invoke(null,new object[]{row});
+        Check(Coordinate(label,"Bottom")<Coordinate(bar,"Y") && Coordinate(bar,"Right")<=width*184/1024,
+            "Backpack status label or bar overlaps");
+    }
+    var dashboardPages = assembly.GetType("Rgdsplus.VerticalWorld.DashboardPages", true);
+    for (int day = 1; day <= 28; day++)
+    {
+        var rect = dashboardPages.GetMethod("CalendarBounds", hiddenStatic).Invoke(null, new object[] { day });
+        Check(Coordinate(rect, "X") >= 0 && Coordinate(rect, "Y") >= 0
+            && Coordinate(rect, "Right") <= width && Coordinate(rect, "Bottom") <= height, "Calendar day clipped at UI " + scale);
+    }
+}
+Console.WriteLine("PASS: 150% default/shared preference, 192 native item centers and three-tab rail/status geometry across 75%-150% UI.");
+var dashboardMenuType = assembly.GetType("Rgdsplus.VerticalWorld.DashboardMenu", true);
+var dashboardMenu = Blank(dashboardMenuType);
+dashboard.GetField("ScrollRow", hiddenStatic).SetValue(null, 0);
+dashboardMenuType.GetMethod("receiveScrollWheelAction").Invoke(dashboardMenu, new object[] { -1 });
+Check((int)dashboard.GetField("ScrollRow", hiddenStatic).GetValue(null) == 0, "Today inventory unexpectedly scrolled");
+var persistentPages = assembly.GetType("Rgdsplus.VerticalWorld.DashboardPages", true);
+var rowType = persistentPages.GetNestedType("Row", BindingFlags.NonPublic);
+var recipeRows = (System.Collections.IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(rowType));
+for (int i = 0; i < 15; i++) recipeRows.Add(Blank(rowType));
+var cachedLists = (System.Collections.IDictionary)persistentPages.GetField("lists", hiddenStatic).GetValue(null);
+cachedLists["crafting"] = recipeRows;
+persistentPages.GetField("refreshPage", hiddenStatic).SetValue(null, 1);
+persistentPages.GetField("refreshAt", hiddenStatic).SetValue(null, long.MaxValue);
+controller.GetField("panel", hiddenStatic).SetValue(null, dashboardMenu);
+controller.GetMethod("OpenPage", hiddenStatic).Invoke(null, new object[] { 1 });
+Check(gameType.GetProperty("activeClickableMenu").GetValue(null) == null, "Companion page took native menu ownership");
+dashboardMenuType.GetMethod("receiveScrollWheelAction").Invoke(dashboardMenu, new object[] { -1 });
+Check((int)dashboard.GetField("ScrollRow", hiddenStatic).GetValue(null) == 1, "Downward wheel did not advance recipes");
+dashboardMenuType.GetMethod("receiveScrollWheelAction").Invoke(dashboardMenu, new object[] { 1 });
+dashboardMenuType.GetMethod("receiveScrollWheelAction").Invoke(dashboardMenu, new object[] { 1 });
+Check((int)dashboard.GetField("ScrollRow", hiddenStatic).GetValue(null) == 0, "Recipe scroll underflowed");
+for (int i = 0; i < 10; i++) dashboardMenuType.GetMethod("receiveScrollWheelAction").Invoke(dashboardMenu, new object[] { -1 });
+Check((int)dashboard.GetField("ScrollRow", hiddenStatic).GetValue(null) == 9, "Recipe scroll overflowed");
+var pausePrefix = uiPatches.GetMethod("PauseMenuPrefix", hiddenStatic);
+object[] pauseArgs = { true };
+Check(!(bool)pausePrefix.Invoke(null, pauseArgs) && !(bool)pauseArgs[0], "Companion native pause was not blocked");
+state.GetType().GetMethod("TryToggle", hiddenInstance).Invoke(state, new object[] { true });
+pauseArgs[0] = true;
+Check((bool)pausePrefix.Invoke(null, pauseArgs), "Continuous-world native pause was blocked");
+state.GetType().GetMethod("TryToggle", hiddenInstance).Invoke(state, new object[] { true });
+Environment.SetEnvironmentVariable("SDV_DUAL_UI_TEST_DIR", null);
+var testDriver = assembly.GetType("Rgdsplus.VerticalWorld.UiTestDriver", true);
+testDriver.GetMethod("Initialize", hiddenStatic).Invoke(null, new object[] { null });
+Check(testDriver.GetField("directory", hiddenStatic).GetValue(null) == null, "QA driver enabled without opt-in");
+Console.WriteLine("PASS: inventory hit regions, 112 calendar bounds, nonmodal pages, mode-scoped pause guard, recipe scroll bounds, QA disabled by default.");
+controller.GetField("MenuScaleLimit", hiddenStatic).SetValue(null, 1024f / 1366f);
+uiPatches.GetMethod("EnsureViewports", hiddenStatic).Invoke(null, null);
+var wideViewport = gameType.GetField("uiViewport").GetValue(null);
+Check((int)wideViewport.GetType().GetProperty("Width").GetValue(wideViewport) >= 1280, "Fixed-width bundle/calendar page would be cropped at 150% UI");
+controller.GetField("MenuScaleLimit", hiddenStatic).SetValue(null, float.MaxValue);
+
+var menuType = gameAssembly.GetType("StardewValley.Menus.IClickableMenu", true);
+var gameMenuType = gameAssembly.GetType("StardewValley.Menus.GameMenu", true);
+var gameMenu = Blank(gameMenuType);
+var pages = (System.Collections.IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(menuType));
+pages.Add(Blank(gameAssembly.GetType("StardewValley.Menus.QuestLog", true)));
+gameMenuType.GetField("pages").SetValue(gameMenu, pages);
+var canSwitch = controller.GetMethod("CanSwitchMenu", hiddenStatic);
+Check((bool)canSwitch.Invoke(null, new[] { gameMenu }), "Ready native page could not change layouts");
+gameMenuType.GetField("forcePreventClose").SetValue(null, true);
+Check(!(bool)canSwitch.Invoke(null, new[] { gameMenu }), "Native close guard was bypassed");
+gameMenuType.GetField("forcePreventClose").SetValue(null, false);
+Check(!(bool)canSwitch.Invoke(null, new[] { Blank(gameAssembly.GetType("StardewValley.Menus.SaveGameMenu", true)) }), "Save menu could be dismissed by Select");
+Check((bool)canSwitch.Invoke(null, new[] { Blank(gameAssembly.GetType("StardewValley.Menus.DialogueBox", true)) }), "Dialogue cannot be preserved during a layout switch");
+
+var route = assembly.GetType("Rgdsplus.VerticalWorld.DialogueRouting", true);
+var textureType = gameType.GetProperty("uiScreen").PropertyType;
+var lowerTarget = Blank(textureType);
+var upperTarget = Blank(textureType);
+gameType.GetField("_uiScreen", hiddenInstance).SetValue(gameInstance, lowerTarget);
+renderer.GetField("upperUi", hiddenStatic).SetValue(null, upperTarget);
+route.GetField("routingMenu", hiddenStatic).SetValue(null, true);
+var targetArgs = new[] { lowerTarget };
+route.GetMethod("TargetPrefix", hiddenStatic).Invoke(null, targetArgs);
+Check(ReferenceEquals(targetArgs[0], upperTarget), "Dialogue UI target was not routed to the upper panel");
+targetArgs[0] = null;
+route.GetMethod("TargetPrefix", hiddenStatic).Invoke(null, targetArgs);
+Check(targetArgs[0] == null, "Dialogue routing modified an unrelated render target");
+route.GetField("routingMenu", hiddenStatic).SetValue(null, false);
+targetArgs[0] = lowerTarget;
+route.GetMethod("TargetPrefix", hiddenStatic).Invoke(null, targetArgs);
+Check(ReferenceEquals(targetArgs[0], lowerTarget), "Normal menus stopped using the lower UI target");
+gameType.GetField("_uiScreen", hiddenInstance).SetValue(gameInstance, null);
+renderer.GetField("upperUi", hiddenStatic).SetValue(null, null);
+// Uninitialized GPU objects are test sentinels, never submitted to a device or disposed.
+GC.SuppressFinalize(lowerTarget); GC.SuppressFinalize(upperTarget);
+gameInstance.GetType().GetField("takingMapScreenshot").SetValue(gameInstance, true);
+Check(!(bool)controller.GetProperty("Expanded", hiddenStatic).GetValue(null), "Native map screenshot did not bypass dashboard routing");
+Console.WriteLine("PASS: three-tab dashboard hit regions, fixed-size menu fit, native close/save guards, scoped dialogue target routing and screenshot bypass.");
+gameInstance.GetType().GetField("takingMapScreenshot").SetValue(gameInstance,false);
+optionsType.GetField("baseZoomLevel").SetValue(options,1f);
+var weather=assembly.GetType("Rgdsplus.VerticalWorld.WeatherViewport",true);
+var worldViewportField=gameType.GetField("viewport");
+var viewType=worldViewportField.FieldType;
+object View(int height)=>Activator.CreateInstance(viewType,new object[]{400,600,1024,height});
+var vectorType=gameType.GetField("previousViewportPosition").FieldType;
+object Vector(float x,float y)=>Activator.CreateInstance(vectorType,new object[]{x,y});
+float Y(object vector)=>(float)vectorType.GetField("Y").GetValue(vector);
+var debrisType=gameAssembly.GetType("StardewValley.WeatherDebris",true);
+var debris=Blank(debrisType);
+gameType.GetField("random").SetValue(null,new Random(1));
+var fadeField=gameType.GetField("screenFade",hiddenStatic);
+fadeField.SetValue(null,Blank(fadeField.FieldType));
+var timeField=gameType.GetField("currentGameTime");
+timeField.SetValue(null,Activator.CreateInstance(timeField.FieldType,new object[]{TimeSpan.FromSeconds(1),TimeSpan.FromMilliseconds(16)}));
+debrisType.GetField("dy").SetValue(debris,.5f);
+debrisType.GetField("animationTimer").SetValue(debris,100000);
+var updateDebris=debrisType.GetMethod("update",new[]{typeof(bool)});
+if((bool)controller.GetProperty("Expanded",hiddenStatic).GetValue(null))state.GetType().GetMethod("TryToggle",hiddenInstance).Invoke(state,new object[]{true});
+worldViewportField.SetValue(null,View(768));
+debrisType.GetField("position").SetValue(debris,Vector(300,780));
+updateDebris.Invoke(debris,new object[]{true});
+Check(Y(debrisType.GetField("position").GetValue(debris))==780.5f,"Petal wrapped at screen seam");
+for(int i=0;i<500;i++)updateDebris.Invoke(debris,new object[]{true});
+Check(Y(debrisType.GetField("position").GetValue(debris))==1030.5f,"Petal failed to continue falling through lower screen");
+Check(Coordinate(worldViewportField.GetValue(null),"Height")==768,"Weather scope leaked into normal viewport");
+debrisType.GetField("position").SetValue(debris,Vector(300,1553));
+updateDebris.Invoke(debris,new object[]{true});
+Check(Y(debrisType.GetField("position").GetValue(debris))==-64,"Petal did not wrap below full scene");
+state.GetType().GetMethod("TryToggle",hiddenInstance).Invoke(state,new object[]{true});
+debrisType.GetField("position").SetValue(debris,Vector(300,800));
+updateDebris.Invoke(debris,new object[]{true});
+Check(Y(debrisType.GetField("position").GetValue(debris))==-64,"Companion weather incorrectly extends to dashboard");
+object[] scope={null};weather.GetMethod("BoundsPrefix",hiddenStatic).Invoke(null,scope);
+var failure=new InvalidOperationException("scope test");
+var actual=weather.GetMethod("BoundsFinalizer",hiddenStatic).Invoke(null,new[]{scope[0],failure});
+Check(ReferenceEquals(actual,failure)&&Coordinate(worldViewportField.GetValue(null),"Height")==768,"Exception did not restore weather bounds");
+gameInstance.GetType().GetField("takingMapScreenshot").SetValue(gameInstance,true);
+scope[0]=null;weather.GetMethod("BoundsPrefix",hiddenStatic).Invoke(null,scope);
+Check(scope[0]==null,"Map screenshot was changed by weather scopes");
+gameInstance.GetType().GetField("takingMapScreenshot").SetValue(gameInstance,false);
+Console.WriteLine("PASS: actual WeatherDebris update crosses seam, falls for 500 ticks, wraps at scene bottom, uses single-panel companion bounds and restores viewport on exceptions/screenshots.");

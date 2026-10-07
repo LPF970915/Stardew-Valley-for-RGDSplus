@@ -1,0 +1,43 @@
+# Generated evidence, packages, caches, and local test state
+/build/
+/cache/
+/.playwright-mcp/
+**/bin/
+**/obj/
+*.log
+*.tmp
+*.cache
+*.pdb
+*.user
+*.suo
+
+# Local toolchains and package-manager downloads
+/tools/dotnet6/
+/tools/bin/
+*.nupkg
+
+# User-owned game data and runtime state. These must never enter the repository.
+/port/stardewvalleymainline/gamedata/
+/port/stardewvalleymainline/savedata/*
+!/port/stardewvalleymainline/savedata/.gitkeep
+/port/stardewvalleymainline/logs/
+/port/stardewvalleymainline/Mods/*
+!/port/stardewvalleymainline/Mods/.gitkeep
+
+# Scratch/debug copies
+*.debug-backup
+*.bak
+
+# Secrets and signing material
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
