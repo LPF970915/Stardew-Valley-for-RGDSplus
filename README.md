@@ -1,8 +1,26 @@
 # Stardew Valley for RGDSplus
 
-## Current verified build - 2026-10-07
+## Current Release - 2026-10-09
 
-当前维护目标是 `0.6.0-reference-v2`。最终入口为 **Ports -> Stardew Valley Vertical World D2 Card2**，双屏物理承载为 `2048x768`，游戏逻辑和菜单保持 `1024x768`，当前物理映射为左半上屏、右半下屏。
+当前发布包为 `20261009-01`，包含 PortMaster 适配层、ARM64 随包运行依赖和
+Windows Steam 正版资源本地导入工具，不包含游戏本体、存档、账号或测试状态。
+菜单入口为 **Stardew Valley for RGDSplus**。将 ZIP 内 `Ports/` 合并到卡二根目录，
+再运行包内 `steam-import/Import Steam Assets.cmd` 导入自己购买的 Windows 主线版。
+安装、升级和旧 D2 目录兼容说明见 [发布包安装说明](packaging/README.zh-CN.md)。
+
+```powershell
+& tools/dotnet6/dotnet.exe build dualscreen/VerticalWorld/VerticalWorld.csproj -c Release
+py -3 tools/build-release.py
+py -3 tools/test-release.py -v
+```
+
+产物：`build/releases/20261009-01/Stardew Valley for RGDSplus.zip`，
+以及整体 SHA256 与审计 JSON。构建不会导入游戏，也不会联网获取本体。
+正常发布入口解除输出静音但保留音量；显式 QA 运行不解除测试静音。
+
+## Verified Dual-Screen Baseline
+
+当前维护目标是 `0.6.0-reference-v2`。开发验收入口为 **Ports -> Stardew Valley Vertical World D2 Card2**，发布入口为 **Stardew Valley for RGDSplus**，双屏物理承载为 `2048x768`，游戏逻辑和菜单保持 `1024x768`，当前物理映射为左半上屏、右半下屏。
 
 进入存档后，默认是 `SceneHud` 连续双屏世界；按 Select 切换到 `ExpandedHud`，上屏保留世界/对话，下屏显示原模组 2.0 参考结构的常驻页面。副屏模式下 Start 不再打开暂停弹窗；连续双屏模式保留原生 Start。两种模式共享 UI 缩放，默认 150%，并使用 PC 游戏运行时原生像素资源。
 

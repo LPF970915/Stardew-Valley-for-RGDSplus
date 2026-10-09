@@ -3,7 +3,7 @@ using System.Runtime.Loader;
 
 string root = Path.GetFullPath(args[0]);
 string modPath = Path.Combine(root, "dualscreen/VerticalWorld/bin/Release/net6.0/VerticalWorld.dll");
-string gamePath = Path.Combine(root, "build/analysis/device-game.dll");
+string gamePath = args.Length > 1 ? Path.GetFullPath(args[1]) : Path.Combine(root, "build/analysis/device-game.dll");
 string[] search = {
     Path.Combine(root, "port/stardewvalleymainline/tools/SMAPIBundle/game-root/smapi-internal"),
     Path.Combine(root, "port/stardewvalleymainline/tools/SMAPIBundle/game-root"),

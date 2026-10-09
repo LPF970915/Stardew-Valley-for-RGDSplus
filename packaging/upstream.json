@@ -1,0 +1,15 @@
+{
+  "name": "PortMaster Stardew Valley Mainline",
+  "release": "2026-07-07_1030",
+  "url": "https://github.com/PortsMaster/PortMaster-New/releases/download/2026-07-07_1030/stardewvalleymainline.zip",
+  "md5": "8557782b70cd56dbbe897f8e980ddc32",
+  "sha256": "40dabf057800b8f9f4ec25e61426ffd49dfc900522d5302910e3d059319ac682",
+  "dotnet": "6.0.32",
+  "smapi": "4.5.2",
+  "testedSteamBuild": "Windows mainline 1.6.15.24356",
+  "lz4": {
+    "version": "1.10.0",
+    "url": "https://github.com/lz4/lz4/tree/v1.10.0/lib",
+    "sha256": "766816459ffb22ac435ec28b955e418f710754fedf57e729a88ed6bdd2bbe57a"
+  }
+}
