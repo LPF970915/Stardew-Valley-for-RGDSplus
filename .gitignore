@@ -4,6 +4,8 @@
 /.playwright-mcp/
 **/bin/
 **/obj/
+**/__pycache__/
+*.pyc
 *.log
 *.tmp
 *.cache
@@ -40,4 +42,3 @@
 .DS_Store
 Thumbs.db
 desktop.ini
-

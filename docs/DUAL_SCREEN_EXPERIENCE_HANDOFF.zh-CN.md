@@ -180,6 +180,7 @@ python tools/qa-visible-showcase.py --hold 1
 - 实体双屏 DRM 轮播：`tools/qa-visible-showcase.py`
 - 窗口定位元数据：`dualscreen/VerticalWorld/UiTestDriver.cs`
 - 天气粒子修复：`dualscreen/VerticalWorld/WeatherViewport.cs`
+- 标题设置、存档、合作列表及地址输入 150% 验收：`docs/TITLE_MENU_SCALE_150.zh-CN.md`
 
 ## 11. 其他窗口接手清单
 

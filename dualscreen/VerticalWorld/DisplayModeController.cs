@@ -31,6 +31,9 @@ namespace Rgdsplus.VerticalWorld
         private static bool returnToDashboard;
         private static Vector2 evdevTouchPosition;
         private static bool evdevTouchDown;
+        private static Point lastTouchPressPoint;
+        private static long lastTouchPressTicks;
+        private static bool lastTouchPressWasEvdev;
         internal static float MenuScaleLimit = float.MaxValue;
         internal static bool Expanded => VerticalWorldRenderer.Enabled && State.Mode == LowerScreenMode.ExpandedHud
             && Game1.gameMode == 3 && Game1.currentLocation != null && Game1.currentMinigame == null
@@ -62,11 +65,21 @@ namespace Rgdsplus.VerticalWorld
             lastModeToggleTicks = 0;
             returnToDashboard = false;
             evdevTouchDown = false;
+            lastTouchPressPoint = Point.Zero;
+            lastTouchPressTicks = 0;
+            lastTouchPressWasEvdev = false;
             Dashboard.Reset();
         }
         private static void OnButtonPressed(object sender, ButtonPressedEventArgs e)
         {
-            if (!VerticalWorldRenderer.Enabled || !Context.IsWorldReady) return;
+            if (!VerticalWorldRenderer.Enabled) return;
+            if ((e.Button == SButton.MouseLeft || e.Button == SButton.MouseRight)
+                && Environment.TickCount64 <= suppressSyntheticMouseUntil)
+            {
+                helper.Input.Suppress(e.Button);
+                return;
+            }
+            if (!Context.IsWorldReady) return;
             DiagnoseCandidateButton(e);
             if (releaseGate.Contains(e.Button)) { helper.Input.Suppress(e.Button); return; }
             if (IsModeSwitchButton(e.Button))
@@ -185,6 +198,7 @@ namespace Rgdsplus.VerticalWorld
         }
         private static void OnUpdateTicked(object sender, UpdateTickedEventArgs e)
         {
+            if (e.IsMultipleOf(60)) NativeTouch.PresentWindow();
             // Suppression lasts until release: an A/B/Select held across a transition cannot reach the new owner.
             released.Clear();
             foreach (var button in releaseGate)
@@ -218,21 +232,19 @@ namespace Rgdsplus.VerticalWorld
                 evdevTouchDown = true;
                 evdevTouchPosition = new Vector2(x, y);
                 suppressSyntheticMouseUntil = Environment.TickCount64 + 450;
-                ModEntry.Write("touch-pressed evdev raw=" + x + "," + y + "; mapped=" + point
-                    + "; mode=" + State.Mode + "; menu=" + (Game1.activeClickableMenu?.GetType().Name ?? "none"));
-                DispatchTouchPress(point);
+                DispatchTouchPress(point, true);
             }
             else if (releasedTouch)
             {
                 evdevTouchDown = false;
-                if (Game1.activeClickableMenu != null) Game1.activeClickableMenu.releaseLeftClick(point.X, point.Y);
+                if (NativeTouch.Target != null) NativeTouch.Continue(point, true);
                 else if (Expanded) Panel.releaseLeftClick(point.X, point.Y);
                 suppressSyntheticMouseUntil = Environment.TickCount64 + 250;
             }
             else if (evdevTouchDown)
             {
                 suppressSyntheticMouseUntil = Environment.TickCount64 + 450;
-                Game1.activeClickableMenu?.leftClickHeld(point.X, point.Y);
+                NativeTouch.Continue(point, false);
                 if (Game1.activeClickableMenu == null && Expanded) Panel.leftClickHeld(point.X, point.Y);
                 float delta = y - evdevTouchPosition.Y;
                 if (Math.Abs(delta) >= 28 && UsesTouchScroll(Game1.activeClickableMenu))
@@ -293,13 +305,13 @@ namespace Rgdsplus.VerticalWorld
                     suppressSyntheticMouseUntil = activeTouchStarted + 450;
                     ModEntry.Write("touch-pressed raw=" + touch.Position + "; mapped=" + point
                         + "; menu=" + (Game1.activeClickableMenu?.GetType().Name ?? "none"));
-                    DispatchTouchPress(point);
+                    DispatchTouchPress(point, false);
                 }
                 else if (touch.Id == activeTouchId && touch.State == TouchLocationState.Moved)
                 {
                     if (TryGetLowerPanelPoint(touch.Position, out var point))
                     {
-                        Game1.activeClickableMenu?.leftClickHeld(point.X, point.Y);
+                        NativeTouch.Continue(point, false);
                         if (Game1.activeClickableMenu == null && Expanded) Panel.leftClickHeld(point.X, point.Y);
                     }
                     float deltaY = touch.Position.Y - activeTouchPosition.Y;
@@ -314,7 +326,7 @@ namespace Rgdsplus.VerticalWorld
                 {
                     if (TryGetLowerPanelPoint(touch.Position, out var point))
                     {
-                        if (Game1.activeClickableMenu != null) Game1.activeClickableMenu.releaseLeftClick(point.X, point.Y);
+                        if (NativeTouch.Target != null) NativeTouch.Continue(point, true);
                         else if (Expanded) Panel.releaseLeftClick(point.X, point.Y);
                     }
                     activeTouchId = -1;
@@ -323,8 +335,29 @@ namespace Rgdsplus.VerticalWorld
             }
         }
 
-        private static void DispatchTouchPress(Point point)
+        private static void DispatchTouchPress(Point point, bool fromEvdev)
         {
+            long now = Environment.TickCount64;
+            if (fromEvdev != lastTouchPressWasEvdev && point == lastTouchPressPoint && now - lastTouchPressTicks <= 250)
+            {
+                ModEntry.Write("touch-duplicate-suppressed mapped=" + point);
+                return;
+            }
+            lastTouchPressPoint = point;
+            lastTouchPressTicks = now;
+            lastTouchPressWasEvdev = fromEvdev;
+            NativeTouch.Begin(point);
+            try { DispatchTouchPressCore(point); }
+            finally { NativeTouch.End(); }
+        }
+
+        private static void DispatchTouchPressCore(Point point)
+        {
+            if (Game1.textEntry != null)
+            {
+                Game1.textEntry.receiveLeftClick(point.X, point.Y, true);
+                return;
+            }
             if (Game1.activeClickableMenu is DashboardMenu dashboard)
             {
                 dashboard.ReceiveTouch(point.X, point.Y);

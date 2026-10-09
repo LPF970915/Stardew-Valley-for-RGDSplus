@@ -1,0 +1,1 @@
+{"Name":"RGDSplus Performance Probe","Author":"RGDSplus","Version":"0.1.0","Description":"Opt-in in-memory performance QA.","UniqueID":"RGDSplus.PerformanceProbe","EntryDll":"PerformanceProbe.dll","MinimumApiVersion":"4.5.2","Dependencies":[{"UniqueID":"RGDSplus.VerticalWorld","IsRequired":true}]}

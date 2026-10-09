@@ -41,22 +41,31 @@ namespace Rgdsplus.VerticalWorld
         // Successful device build: upper=left (DRM plane 98), lower=right (plane 58).
         internal static readonly bool UpperOnRight = Environment.GetEnvironmentVariable("SDV_RGDS_PHYSICAL_UPPER") == "right";
         internal static readonly bool TwoPass = Environment.GetEnvironmentVariable("SDV_DUAL_WORLD_PASSES") == "2";
+        internal static readonly bool LowerCachePrototype = Environment.GetEnvironmentVariable("SDV_LOWER_WORLD_CACHE") == "1";
+        private static readonly int LowerCacheInterval = ParseCacheInterval();
         internal static Rectangle PhysicalUpper => new Rectangle(UpperOnRight ? 1024 : 0, 0, 1024, 768);
         internal static Rectangle PhysicalLower => new Rectangle(UpperOnRight ? 0 : 1024, 0, 1024, 768);
         internal static int WorldWidth => ScreenGeometry.Width(Game1.options?.zoomLevel ?? 1f);
         internal static int WorldHeight => ScreenGeometry.Height(Game1.options?.zoomLevel ?? 1f);
         internal static bool DrawingWorld;
-        private static bool secondPass, worldThisFrame, cachedWorld;
+        private static bool secondPass, worldThisFrame, cachedWorld, lowerCacheValid;
+        private static int lowerCacheFrame = -1;
         private static RenderTarget2D world, lower, upperUi;
         internal static RenderTarget2D UpperUi => upperUi;
         private static bool upperUiThisFrame;
         private static bool NeedsUpperUi => DisplayModeController.Expanded && (Game1.dialogueUp || Game1.activeClickableMenu is DialogueBox);
-        private static bool UseTwoPass => TwoPass && !DisplayModeController.Expanded;
+        private static bool UseTwoPass => (TwoPass || LowerCachePrototype) && !DisplayModeController.Expanded;
         private static GameLocation lastLocation;
         private static int cameraX, cameraY;
         private static long lastGeometryLog;
         private static int presentationSamples;
         private static readonly Action<int, int> AllocateLightmap = (Action<int, int>)Delegate.CreateDelegate(typeof(Action<int, int>), AccessTools.Method(typeof(Game1), "allocateLightmap"));
+
+        private static int ParseCacheInterval()
+        {
+            return int.TryParse(Environment.GetEnvironmentVariable("SDV_LOWER_CACHE_INTERVAL"), out var value)
+                ? Math.Max(1, Math.Min(30, value)) : 4;
+        }
 
         internal static void Install()
         {
@@ -164,6 +173,7 @@ namespace Rgdsplus.VerticalWorld
             if (UseTwoPass) Resize(ref lower, __instance.GraphicsDevice, w, h, "Reference.Lower");
             var location = Game1.currentLocation;
             int mapW = location.Map.DisplayWidth, mapH = location.Map.DisplayHeight;
+            if (!ReferenceEquals(location, lastLocation)) lowerCacheValid = false;
             var scene=SceneViewport();
             cameraX=scene.X;cameraY=scene.Y;
             __state = new WorldState { Destination = target_screen ?? __instance.screen, Viewport=Game1.viewport, Active = true };
@@ -186,7 +196,7 @@ namespace Rgdsplus.VerticalWorld
         private static void WorldPostfix(Game1 __instance, GameTime time, ref RenderTarget2D target_screen, WorldState __state)
         {
             if (__state == null || !__state.Active) return;
-            if (UseTwoPass)
+            if (UseTwoPass && (!LowerCachePrototype || ShouldRefreshLower()))
             {
                 secondPass = true;
                 try
@@ -194,6 +204,8 @@ namespace Rgdsplus.VerticalWorld
                     Game1.viewport = new xTile.Dimensions.Rectangle(cameraX, cameraY + WorldHeight, WorldWidth, WorldHeight);
                     __instance.GraphicsDevice.SetRenderTarget(lower);
                     __instance.DrawWorld(time, lower);
+                    lowerCacheValid = true;
+                    lowerCacheFrame = Environment.TickCount;
                 }
                 finally { secondPass = false; }
             }
@@ -215,6 +227,18 @@ namespace Rgdsplus.VerticalWorld
             game.GraphicsDevice.SetRenderTarget(state.Destination);
             state.Active = false;
             UiPatches.EnsureUiViewport();
+        }
+
+        private static bool ShouldRefreshLower()
+        {
+            if (!lowerCacheValid) return true;
+            if (Game1.player == null || Game1.currentLocation == null) return true;
+            if (Game1.player.UsingTool) return true;
+            int lowerTop = cameraY + WorldHeight;
+            float playerY = Game1.player.Position.Y;
+            const int margin = 96;
+            if (playerY >= lowerTop - margin && playerY <= lowerTop + WorldHeight + margin) return true;
+            return Environment.TickCount - lowerCacheFrame >= LowerCacheInterval * 16;
         }
 
         private static bool PresentPrefix(Game1 __instance, RenderTarget2D target_screen)
@@ -291,11 +315,15 @@ namespace Rgdsplus.VerticalWorld
             world?.Dispose(); lower?.Dispose(); upperUi?.Dispose();
             world = lower = upperUi = null;
             cachedWorld = worldThisFrame = false;
+            lowerCacheValid = false;
+            lowerCacheFrame = -1;
             lastLocation = null;
         }
         internal static void InvalidateWorld()
         {
             cachedWorld = worldThisFrame = false;
+            lowerCacheValid = false;
+            lowerCacheFrame = -1;
             lastGeometryLog = 0;
         }
     }

@@ -76,6 +76,20 @@ mapArgs = new object[] { 1124f, 200f, 1024, 768, null };
 Check((bool)tryMap.Invoke(null, mapArgs), "Composite lower-panel touch did not map");
 mapped = mapArgs[4];
 Check(Coordinate(mapped, "X") == 100 && Coordinate(mapped, "Y") == 200, "Composite touch mapping changed coordinates");
+foreach (var uiSize in new[] { (1024, 768), (911, 683), (768, 576) })
+{
+    mapArgs = new object[] { 512f, 384f, uiSize.Item1, uiSize.Item2, null };
+    Check((bool)tryMap.Invoke(null, mapArgs), "Panel-center touch did not map at UI scale " + uiSize);
+    mapped = mapArgs[4];
+    Check(Math.Abs(Coordinate(mapped, "X") - uiSize.Item1 / 2) <= 1
+        && Math.Abs(Coordinate(mapped, "Y") - uiSize.Item2 / 2) <= 1,
+        "Panel-center touch drifted from native menu center at UI scale " + uiSize);
+    mapArgs = new object[] { 1023f, 767f, uiSize.Item1, uiSize.Item2, null };
+    Check((bool)tryMap.Invoke(null, mapArgs), "Bottom-right character-menu option touch did not map");
+    mapped = mapArgs[4];
+    Check(Coordinate(mapped, "X") == uiSize.Item1 - 1 && Coordinate(mapped, "Y") == uiSize.Item2 - 1,
+        "Bottom-right touch escaped native menu coordinate bounds");
+}
 mapArgs = new object[] { 2048f, 200f, 1024, 768, null };
 Check(!(bool)tryMap.Invoke(null, mapArgs), "Out-of-range touch was accepted");
 var beforeMode = state.GetType().GetProperty("Mode", hiddenInstance).GetValue(state).ToString();
@@ -285,3 +299,137 @@ scope[0]=null;weather.GetMethod("BoundsPrefix",hiddenStatic).Invoke(null,scope);
 Check(scope[0]==null,"Map screenshot was changed by weather scopes");
 gameInstance.GetType().GetField("takingMapScreenshot").SetValue(gameInstance,false);
 Console.WriteLine("PASS: actual WeatherDebris update crosses seam, falls for 500 ticks, wraps at scene bottom, uses single-panel companion bounds and restores viewport on exceptions/screenshots.");
+
+var characterLayout = assembly.GetType("Rgdsplus.VerticalWorld.CharacterCreationLayout", true);
+var titleMenuLayout = assembly.GetType("Rgdsplus.VerticalWorld.TitleMenuLayout", true);
+Check((bool)titleMenuLayout.GetProperty("Installed", hiddenStatic).GetValue(null),
+    "Title menu patches failed to install: " + File.ReadAllText(logPath));
+Check((bool)characterLayout.GetProperty("Installed", hiddenStatic).GetValue(null),
+    "Optional character creation patches failed to install: " + File.ReadAllText(logPath));
+var titleType = gameAssembly.GetType("StardewValley.Menus.TitleMenu", true);
+var characterType = gameAssembly.GetType("StardewValley.Menus.CharacterCustomization", true);
+var title = Blank(titleType);
+var character = Blank(characterType);
+var activeMenuField = gameType.GetField("_activeClickableMenu", hiddenStatic);
+var subMenuField = titleType.GetField("_subMenu", hiddenStatic);
+var previousMenu = activeMenuField.GetValue(null);
+var previousSubMenu = subMenuField.GetValue(null);
+var previousMode = gameType.GetField("_gameMode", hiddenStatic).GetValue(null);
+var previousScale = optionsType.GetField("baseUIScale").GetValue(options);
+try
+{
+    // TitleMenu.Dispose clears menuContent before its subMenu setter runs.
+    // The optional layout postfix must be a no-op in that teardown state.
+    activeMenuField.SetValue(null, title);
+    titleType.GetField("menuContent").SetValue(title, null);
+    assembly.GetType("Rgdsplus.VerticalWorld.CharacterCreationLayout", true)
+        .GetMethod("AfterSubMenu", hiddenStatic)
+        .Invoke(null, new object[] { true });
+    Console.WriteLine("PASS: title-menu teardown does not re-enter disposed layout resources.");
+
+    gameType.GetField("_gameMode", hiddenStatic).SetValue(null, (byte)0);
+    activeMenuField.SetValue(null, title);
+    subMenuField.SetValue(null, character);
+    foreach (float scale in new[] { .75f, 1f, 1.5f })
+    {
+        optionsType.GetField("baseUIScale").SetValue(options, scale);
+        uiPatches.GetMethod("EnsureUiViewport", hiddenStatic).Invoke(null, null);
+        Check(Math.Abs((float)optionsType.GetProperty("uiScale").GetValue(options) - 1.5f * 1024f / 1366f) < .001,
+            "New character creation does not use 150% UI");
+        var characterViewport = gameType.GetField("uiViewport").GetValue(null);
+        float characterScale = (float)optionsType.GetProperty("uiScale").GetValue(options);
+        Check(Math.Abs(Coordinate(characterViewport, "Width") * characterScale - 1024) <= 1.5f
+            && Math.Abs(Coordinate(characterViewport, "Height") * characterScale - 768) <= 1.5f,
+            "150% character creation changed the physical panel contract");
+        Check((float)optionsType.GetField("baseUIScale").GetValue(options) == scale,
+            "Character creation overwrote the saved UI preference");
+    }
+    characterType.GetField("source").SetValue(character,
+        Enum.Parse(characterType.GetField("source").FieldType, "Wizard"));
+    optionsType.GetField("baseUIScale").SetValue(options, 1f);
+    Check(!(bool)characterLayout.GetProperty("Active", hiddenStatic).GetValue(null),
+        "New game layout affects existing character customization");
+    Check(Math.Abs((float)optionsType.GetProperty("uiScale").GetValue(options) - 1024f / 1366f) < .001,
+        "Wizard menu scale was changed");
+    foreach (string menuName in new[] { "AdvancedGameOptions", "LoadGameMenu", "CoopMenu", "TitleTextInputMenu" })
+    {
+        var submenu = Blank(gameAssembly.GetType("StardewValley.Menus." + menuName, true));
+        subMenuField.SetValue(null, submenu);
+        uiPatches.GetMethod("EnsureUiViewport", hiddenStatic).Invoke(null, null);
+        Check(Math.Abs((float)optionsType.GetProperty("uiScale").GetValue(options) - 1.5f * 1024f / 1366f) < .001,
+            menuName + " still uses 100% UI");
+        if (menuName is "LoadGameMenu" or "CoopMenu")
+            Check((int)titleMenuLayout.GetMethod("PageCount", hiddenStatic).Invoke(null, new[] { submenu }) == 2,
+                menuName + " page count does not match the two visible rows");
+    }
+    activeMenuField.SetValue(null, null);
+    var worldLoad = Blank(gameAssembly.GetType("StardewValley.Menus.LoadGameMenu", true));
+    Check((int)titleMenuLayout.GetMethod("PageCount", hiddenStatic).Invoke(null, new[] { worldLoad }) == 4,
+        "Title page sizing changed an in-game load menu");
+}
+finally
+{
+    activeMenuField.SetValue(null, previousMenu);
+    subMenuField.SetValue(null, previousSubMenu);
+    gameType.GetField("_gameMode", hiddenStatic).SetValue(null, previousMode);
+    optionsType.GetField("baseUIScale").SetValue(options, previousScale);
+}
+Console.WriteLine("PASS: character creation patches install, use 150% on the lower panel, preserve preferences and exclude existing-character menus.");
+
+var nativeTouch = assembly.GetType("Rgdsplus.VerticalWorld.NativeTouch", true);
+var dispatchField = nativeTouch.GetField("<Dispatching>k__BackingField", hiddenStatic);
+bool previousDispatch = (bool)dispatchField.GetValue(null);
+try
+{
+    dispatchField.SetValue(null, true);
+    Check(!(bool)optionsType.GetProperty("SnappyMenus").GetValue(options),
+        "Touch still requires the gamepad cursor to select native buttons");
+    dispatchField.SetValue(null, false);
+    object[] pointerArgs = { false };
+    Check((bool)nativeTouch.GetMethod("PointerMenus", hiddenStatic).Invoke(null, pointerArgs),
+        "Touch override persists outside touch dispatch");
+}
+finally { dispatchField.SetValue(null, previousDispatch); }
+Console.WriteLine("PASS: native touch bypasses gamepad snap gates only during pointer dispatch.");
+
+var dialogueLayout = assembly.GetType("Rgdsplus.VerticalWorld.DialogueLayout", true);
+var fitDialogueWidth = dialogueLayout.GetMethod("FitWidth", hiddenStatic);
+var savedDialogueMenu = activeMenuField.GetValue(null);
+var savedDialogueMode = gameType.GetField("_gameMode", hiddenStatic).GetValue(null);
+var savedDialogueScale = optionsType.GetField("baseUIScale").GetValue(options);
+try
+{
+    activeMenuField.SetValue(null, null);
+    gameType.GetField("_gameMode", hiddenStatic).SetValue(null, (byte)3);
+    foreach (float scale in new[] { .75f, 1f, 1.25f, 1.5f })
+    foreach (bool expanded in new[] { false, true })
+    {
+        optionsType.GetField("baseUIScale").SetValue(options, scale);
+        var mode = state.GetType().GetProperty("Mode", hiddenInstance).GetValue(state).ToString();
+        if ((mode == "ExpandedHud") != expanded)
+            state.GetType().GetMethod("TryToggle", hiddenInstance).Invoke(state, new object[] { true });
+        foreach (int original in new[] { 1200, 1240 })
+        {
+            int width = (int)fitDialogueWidth.Invoke(null, new object[] { original });
+            var view = gameType.GetField("uiViewport").GetValue(null);
+            int viewportWidth = Coordinate(view, "Width");
+            int x = viewportWidth / 2 - width / 2;
+            Check(x - 44 >= 0 && x + width + 40 <= viewportWidth,
+                "Native dialogue frame exceeds the physical panel at " + scale);
+            Check(width - 484 > 0, "Dialogue portrait leaves no text column");
+            Check((int)fitDialogueWidth.Invoke(null, new object[] { 300 }) == 300,
+                "Short dialogue width was enlarged");
+        }
+    }
+    gameType.GetField("takingMapScreenshot").SetValue(gameInstance, true);
+    Check((int)fitDialogueWidth.Invoke(null, new object[] { 1200 }) == 1200,
+        "Dialogue fit modifies a native map screenshot");
+}
+finally
+{
+    gameType.GetField("takingMapScreenshot").SetValue(gameInstance, false);
+    activeMenuField.SetValue(null, savedDialogueMenu);
+    gameType.GetField("_gameMode", hiddenStatic).SetValue(null, savedDialogueMode);
+    optionsType.GetField("baseUIScale").SetValue(options, savedDialogueScale);
+}
+Console.WriteLine("PASS: dialogue body, native outer corners and portrait text fit both modes at 75%-150%, without changing short boxes or screenshot mode.");

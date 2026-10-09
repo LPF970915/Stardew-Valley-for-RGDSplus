@@ -17,6 +17,22 @@ namespace Rgdsplus.VerticalWorld
         private const int PanelHeight = 768;
         private const int LogoWidth = 800;
         private const int LogoHeight = 374;
+        private static Texture2D skyTexture;
+        private static SpriteFont attributionFont;
+        private static readonly Rectangle[] cloudSources =
+        {
+            new Rectangle(152, 447, 123, 55), new Rectangle(0, 471, 149, 66), new Rectangle(410, 467, 63, 37)
+        };
+        private static readonly Point[] clouds =
+        {
+            new Point(80, 145), new Point(675, 120),
+            new Point(160, 590), new Point(710, 625),
+            new Point(395, 715), new Point(880, 730),
+            new Point(60, 845), new Point(555, 870),
+            new Point(280, 965), new Point(780, 990),
+            new Point(95, 1100), new Point(620, 1080),
+            new Point(430, 660), new Point(930, 930), new Point(470, 1180)
+        };
 
         [ThreadStatic] private static TitleMenu drawingTitle;
 
@@ -31,6 +47,8 @@ namespace Rgdsplus.VerticalWorld
         private static void BeforeDraw(TitleMenu __instance, SpriteBatch b)
         {
             drawingTitle = __instance;
+            if (__instance.muteMusicButton != null) __instance.muteMusicButton.visible = false;
+            if (__instance.windowedButton != null) __instance.windowedButton.visible = false;
             var bounds = new Rectangle(0, 0, Game1.uiViewport.Width, Game1.uiViewport.Height);
             DrawSceneSlice(b, __instance, bounds, PanelHeight);
         }
@@ -72,6 +90,7 @@ namespace Rgdsplus.VerticalWorld
             var r = source.Value;
             if (texture == drawingTitle.titleButtonsTexture && r == new Rectangle(0, 0, 400, 187)) return true;
             if (texture == Game1.mouseCursors && (r.Y == 1912 || r.Y == 1453 || r.Y == 886 || r.Y == 737)) return true;
+            if (texture == Game1.mouseCursors && r.Y == 384 && (r.X == 128 || r.X == 137 || r.X == 146 || r.X == 155)) return true;
             return false;
         }
 
@@ -102,11 +121,12 @@ namespace Rgdsplus.VerticalWorld
             float scale = bounds.Width / (float)SceneWidth;
             float sceneShift = GetSceneShift(title);
 
-            DrawGradient(b, bounds, sceneTop, sceneShift);
+            DrawGradient(b, bounds, sceneTop, sceneShift, scale);
             DrawStars(b, bounds, sceneTop, sceneShift, scale);
             DrawClouds(b, title, bounds, sceneTop, sceneShift, scale);
             DrawMountains(b, bounds, sceneTop, sceneShift, scale);
-            DrawLogo(b, title, bounds, sceneTop, sceneShift, scale);
+            if (sceneTop == 0) DrawLogo(b, title, bounds, sceneTop, sceneShift, scale);
+            else if (TitleMenu.subMenu == null) DrawAttribution(b, bounds);
 
             if (title.logoFadeTimer > 0)
             {
@@ -125,17 +145,20 @@ namespace Rgdsplus.VerticalWorld
             return 220f * (1f - progress);
         }
 
-        private static void DrawGradient(SpriteBatch b, Rectangle bounds, int sceneTop, float shift)
+        private static void DrawGradient(SpriteBatch b, Rectangle bounds, int sceneTop, float shift, float scale)
         {
-            const int bands = 24;
-            for (int i = 0; i < bands; i++)
+            if (skyTexture == null || skyTexture.IsDisposed || skyTexture.GraphicsDevice != b.GraphicsDevice)
             {
-                int y0 = bounds.Y + i * bounds.Height / bands;
-                int y1 = bounds.Y + (i + 1) * bounds.Height / bands;
-                int worldY = sceneTop + (int)((y0 - bounds.Y) / (float)bounds.Height * PanelHeight - shift);
-                float t = MathHelper.Clamp(worldY / (float)SceneHeight, 0f, 1f);
-                b.Draw(Game1.staminaRect, new Rectangle(bounds.X, y0, bounds.Width, Math.Max(1, y1 - y0 + 1)), SkyColor(t));
+                skyTexture?.Dispose();
+                skyTexture = new Texture2D(b.GraphicsDevice, 1, SceneHeight, false, SurfaceFormat.Color);
+                var pixels = new Color[SceneHeight];
+                for (int y = 0; y < pixels.Length; y++) pixels[y] = SkyColor(y / (float)(SceneHeight - 1));
+                skyTexture.SetData(pixels);
             }
+
+            b.Draw(Game1.staminaRect, bounds, SkyColor(MathHelper.Clamp((sceneTop - shift) / SceneHeight, 0f, 1f)));
+            var destination = new Rectangle(bounds.X, bounds.Y + (int)((shift - sceneTop) * scale), bounds.Width, (int)(SceneHeight * scale));
+            DrawClipped(b, skyTexture, destination, new Rectangle(0, 0, 1, SceneHeight), bounds);
         }
 
         private static Color SkyColor(float t)
@@ -146,36 +169,28 @@ namespace Rgdsplus.VerticalWorld
 
         private static void DrawStars(SpriteBatch b, Rectangle bounds, int sceneTop, float shift, float scale)
         {
-            int[] stars = { 90, 130, 214, 282, 356, 433, 514, 612, 694, 786, 864, 946 };
-            for (int i = 0; i < stars.Length; i++)
-            {
-                float worldY = 100 + (i * 47 % 285);
-                float screenY = bounds.Y + worldY - sceneTop + shift;
-                if (screenY < bounds.Y - 4 || screenY > bounds.Bottom + 4) continue;
-                int size = i % 3 == 0 ? 3 : 2;
-                Color color = i % 4 == 0 ? new Color(255, 242, 180) : Color.White;
-                b.Draw(Game1.staminaRect, new Rectangle(bounds.X + (int)(stars[i] * scale), (int)screenY, size, size), color * 0.9f);
-            }
+            if (sceneTop != 0) return;
+            // Reuse TitleMenu.draw's starfield, including its translucent halos
+            // and four-point stars, at 2x so it fits above the dual-screen logo.
+            var source = new Rectangle(0, 1453, 638, 195);
+            int width = (int)(source.Width * 2 * scale);
+            var destination = new Rectangle(bounds.X + (bounds.Width - width) / 2,
+                bounds.Y + (int)(shift * scale), width, (int)(source.Height * 2 * scale));
+            DrawClipped(b, Game1.mouseCursors, destination, source, bounds);
         }
 
         private static void DrawClouds(SpriteBatch b, TitleMenu title, Rectangle bounds, int sceneTop, float shift, float scale)
         {
             if (title.cloudsTexture == null) return;
             double seconds = Game1.currentGameTime?.TotalGameTime.TotalSeconds ?? 0;
-            Rectangle[] sources =
+            for (int i = 0; i < clouds.Length; i++)
             {
-                new Rectangle(152, 447, 123, 55), new Rectangle(0, 471, 149, 66), new Rectangle(410, 467, 63, 37),
-                new Rectangle(152, 447, 123, 55), new Rectangle(0, 471, 149, 66), new Rectangle(410, 467, 63, 37)
-            };
-            int[] worldYs = { 210, 355, 500, 650, 810, 970 };
-            for (int i = 0; i < sources.Length; i++)
-            {
-                Rectangle source = sources[i];
+                Rectangle source = cloudSources[i % cloudSources.Length];
                 int cloudW = Math.Max(1, (int)(source.Width * scale));
                 int cloudH = Math.Max(1, (int)(source.Height * scale));
                 float speed = 12f + i % 3 * 5f;
-                float x = (float)((seconds * speed + i * 191) % (SceneWidth + cloudW)) - cloudW;
-                float y = bounds.Y + worldYs[i] - sceneTop + shift;
+                float x = (float)((seconds * speed + clouds[i].X + source.Width) % (SceneWidth + source.Width)) - source.Width;
+                float y = bounds.Y + (clouds[i].Y - sceneTop + shift) * scale;
                 DrawClipped(b, title.cloudsTexture, new Rectangle(bounds.X + (int)(x * scale), (int)y, cloudW, cloudH), source, bounds);
             }
         }
@@ -201,10 +216,29 @@ namespace Rgdsplus.VerticalWorld
 
             float p = MathHelper.Clamp(progress, 0f, 1f);
             float eased = 1f + 2.2f * (p - 1f) * (p - 1f) * (p - 1f) + 1.2f * (p - 1f) * (p - 1f);
-            float worldY = -260f + 520f * eased;
             int x = bounds.X + (bounds.Width - (int)(LogoWidth * scale)) / 2;
-            int y = bounds.Y + (int)((worldY - sceneTop + shift) * scale);
+            int centeredY = bounds.Y + (bounds.Height - (int)(LogoHeight * scale)) / 2;
+            int y = centeredY + (int)((eased - 1f) * bounds.Height * 0.55f);
             DrawClipped(b, title.titleButtonsTexture, new Rectangle(x, y, (int)(LogoWidth * scale), (int)(LogoHeight * scale)), new Rectangle(0, 0, 400, 187), bounds);
+        }
+
+        private static void DrawAttribution(SpriteBatch b, Rectangle bounds)
+        {
+            // The credit stays Chinese even when the game uses English. Load
+            // its Chinese font explicitly instead of using the active-language font.
+            var font = attributionFont ??= Game1.content.Load<SpriteFont>("Fonts/SmallFont.zh-CN");
+            string[] lines = { "Stardew Valley " + Game1.version + " for RGDSplus", "移植by Blood_roc" };
+            float panelScale = bounds.Width / 1024f;
+            float scale = 32f * panelScale / font.LineSpacing;
+            float y = bounds.Y + 18f * panelScale;
+            for (int i = 0; i < lines.Length; i++)
+            {
+                var size = font.MeasureString(lines[i]) * scale;
+                var position = new Vector2((float)Math.Round(bounds.Right - 22f * panelScale - size.X), (float)Math.Round(y));
+                b.DrawString(font, lines[i], position + new Vector2(2f * panelScale), new Color(18, 49, 103) * 0.9f, 0f, Vector2.Zero, scale, SpriteEffects.None, 0.89f);
+                b.DrawString(font, lines[i], position, new Color(243, 248, 255), 0f, Vector2.Zero, scale, SpriteEffects.None, 0.9f);
+                y += 36f * panelScale;
+            }
         }
 
         private static void DrawClipped(SpriteBatch b, Texture2D texture, Rectangle destination, Rectangle source, Rectangle clip, Color color = default(Color))

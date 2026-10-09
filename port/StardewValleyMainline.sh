@@ -1,5 +1,12 @@
 #!/bin/bash
 
+# Refuse a second instance before PortMaster or input helpers change state.
+if [ "${SDV_DUAL_SCREEN_VERTICAL_WORLD:-0}" = "1" ] && [ "${SDV_SESSION_LOCKED:-0}" != "1" ]; then
+  # --close prevents the long-lived firmware/tee helpers inheriting the lock.
+  exec flock -n -o /tmp/stardew-rgds-session.lock env SDV_SESSION_LOCKED=1 /bin/bash "$0" "$@"
+fi
+unset SDV_SESSION_LOCKED
+
 XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
 
 if [ -d "/opt/system/Tools/PortMaster/" ]; then
@@ -81,7 +88,39 @@ restore_touch_mode() {
     echo "[touch-mode] restore skipped current=$(cat "$touch_mode_path" 2>/dev/null || true)"
   fi
 }
-trap restore_touch_mode EXIT
+session_guard_pid=""
+gptokeyb_pid=""
+session_path=""
+cleanup_session() {
+  if [ -n "$session_guard_pid" ]; then
+    kill -TERM "$session_guard_pid" 2>/dev/null || true
+    wait "$session_guard_pid" 2>/dev/null || true
+  fi
+  if [ -n "$gptokeyb_pid" ]; then
+    kill -TERM "$gptokeyb_pid" 2>/dev/null || true
+    wait "$gptokeyb_pid" 2>/dev/null || true
+  fi
+  restore_touch_mode
+}
+trap cleanup_session EXIT
+trap 'exit 143' TERM HUP
+trap 'exit 130' INT
+
+if [ "${SDV_DUAL_SCREEN_VERTICAL_WORLD:-0}" = "1" ]; then
+  session_path="$(mktemp -d /tmp/sdv-session-XXXXXXXX)/run"
+  export SDV_SESSION_TOKEN="$session_path"
+  python3 "$gamedir/tools/rgds-session.py" --session "$session_path" --owner "$$" --game-dir "$gamedir" &
+  session_guard_pid=$!
+  for ((attempt=0; attempt<60; attempt++)); do
+    [ ! -f "$session_path.ready" ] || break
+    kill -0 "$session_guard_pid" 2>/dev/null || break
+    sleep .05
+  done
+  if [ ! -f "$session_path.ready" ]; then
+    echo "RGDS input guard failed to start; refusing an unprotected session."
+    exit 1
+  fi
+fi
 
 $ESUDO chmod 666 /dev/tty0
 printf "\033c" > /dev/tty0
@@ -189,15 +228,18 @@ fi
 cd "$gamedir/gamedata"
 
 $GPTOKEYB "$DOTNET_ROOT/dotnet" &
+gptokeyb_pid=$!
 command -v pm_platform_helper >/dev/null 2>&1 && pm_platform_helper "$DOTNET_ROOT/dotnet"
-"$DOTNET_ROOT/dotnet" "$entry_assembly"
+"$DOTNET_ROOT/dotnet" "$entry_assembly" &
+game_pid=$!
+if [ -n "$session_path" ]; then printf '%s\n' "$game_pid" >"$session_path.game.pid"; fi
+wait "$game_pid"
 game_status=$?
 echo "Stardew Valley exited with status ${game_status}."
 
 if command -v pm_finish >/dev/null 2>&1; then
   pm_finish
 else
-  gptokeyb_pid="$(pidof gptokeyb 2>/dev/null || true)"
-  [ -n "$gptokeyb_pid" ] && $ESUDO kill -9 $gptokeyb_pid
+  [ -n "$gptokeyb_pid" ] && kill -TERM "$gptokeyb_pid" 2>/dev/null || true
   command -v systemctl >/dev/null 2>&1 && $ESUDO systemctl restart oga_events &
 fi

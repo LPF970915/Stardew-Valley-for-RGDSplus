@@ -17,6 +17,7 @@ namespace Rgdsplus.VerticalWorld
         }
         internal static void Install(Harmony harmony)
         {
+            DialogueLayout.Install(harmony);
             harmony.Patch(AccessTools.Method(typeof(Game1), "DrawMenu"), prefix: new HarmonyMethod(typeof(DialogueRouting), nameof(MenuPrefix)), finalizer: new HarmonyMethod(typeof(DialogueRouting), nameof(RouteFinalizer)));
             harmony.Patch(AccessTools.Method(typeof(Game1), "SetRenderTarget"), prefix: new HarmonyMethod(typeof(DialogueRouting), nameof(TargetPrefix)));
             harmony.Patch(AccessTools.Method(typeof(Game1), "drawDialogueBox", Type.EmptyTypes), prefix: new HarmonyMethod(typeof(DialogueRouting), nameof(LegacyPrefix)), finalizer: new HarmonyMethod(typeof(DialogueRouting), nameof(RouteFinalizer)));

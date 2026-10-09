@@ -64,6 +64,7 @@ namespace Rgdsplus.VerticalWorld
         }
         internal static void EndFrame()
         {
+            NativeTouch.AfterFrame();
             drawMs += Milliseconds(Stopwatch.GetTimestamp() - frameStart);
             frames++;
             double elapsed = Milliseconds(frameStart - windowStart);

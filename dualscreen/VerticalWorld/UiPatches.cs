@@ -14,6 +14,9 @@ namespace Rgdsplus.VerticalWorld
     {
         internal static void Install(Harmony harmony)
         {
+            NativeTouch.Install(harmony);
+            CharacterCreationLayout.Install(harmony);
+            TitleMenuLayout.Install(harmony);
             harmony.Patch(AccessTools.Method(typeof(Game1), nameof(Game1.CanShowPauseMenu)),
                 prefix: new HarmonyMethod(typeof(UiPatches), nameof(PauseMenuPrefix)));
             harmony.Patch(AccessTools.Method(typeof(Game1), "SetWindowSize"),
@@ -86,6 +89,7 @@ namespace Rgdsplus.VerticalWorld
             if (!VerticalWorldRenderer.Enabled || Game1.game1?.takingMapScreenshot == true) return true;
             // Native PortMaster single-panel fit, independently multiplied by the UI setting.
             __result = ScreenGeometry.ValidScale(__instance.baseUIScale) * (1024f / 1366f);
+            if (CharacterCreationLayout.Active || TitleMenuLayout.UsesLargeScale) __result = TitleMenuLayout.Scale;
             if (DisplayModeController.Expanded) __result = Math.Min(__result, DisplayModeController.MenuScaleLimit);
             return false;
         }

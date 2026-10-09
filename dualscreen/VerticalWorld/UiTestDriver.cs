@@ -3,6 +3,7 @@ using System.IO;
 using System.Reflection;
 using System.Linq;
 using System.Text.Json;
+using HarmonyLib;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
@@ -78,7 +79,51 @@ namespace Rgdsplus.VerticalWorld
                 switch (data.GetProperty("action").GetString())
                 {
                     case "status": break;
+                    case "dialogue_probe":
+                        if (!fixtureActive) throw new InvalidOperationException("In-memory fixture required.");
+                        fixtureSettlesUntil = 0;
+                        Game1.activeClickableMenu = null;
+                        string text = LocalizedContentManager.CurrentLanguageCode == LocalizedContentManager.LanguageCode.zh
+                            ? "你好，欢迎来到农场。今天的天气很好，我们可以一起种植蔬菜，照顾动物，修理房屋，然后去镇上和朋友们聊天。"
+                            : "Welcome to the farm. Today we can plant vegetables, care for the animals, repair the farmhouse, and meet our friends in town.";
+                        var kind = data.GetProperty("kind").GetString();
+                        DialogueBox probe;
+                        if (kind == "portrait")
+                            probe = new DialogueBox(new Dialogue(Game1.getCharacterFromName("Robin"), "RGDS.QA.Dialogue",
+                                string.Join(" ", Enumerable.Repeat(text, 5))));
+                        else if (kind == "question")
+                            probe = new DialogueBox(text, new[] { new Response("yes", "Yes"), new Response("no", "No") });
+                        else if (kind == "list")
+                            probe = new DialogueBox(new System.Collections.Generic.List<string> { text, text });
+                        else probe = new DialogueBox(text);
+                        probe.transitioning = false;
+                        probe.transitionInitialized = true;
+                        probe.characterIndexInDialogue = probe.getCurrentString().Length;
+                        Game1.activeClickableMenu = probe;
+                        break;
+                    case "dialogue_dismiss":
+                        if (!fixtureActive) throw new InvalidOperationException("In-memory fixture required.");
+                        Game1.activeClickableMenu = null;
+                        Game1.dialogueUp = false;
+                        break;
+                    case "fixture_quit":
+                        if (!fixtureActive) throw new InvalidOperationException("In-memory fixture required.");
+                        Game1.game1.Exit();
+                        break;
+                    case "title_keyboard_cancel":
+                        if (Game1.activeClickableMenu is not TitleMenu || Game1.textEntry == null)
+                            throw new InvalidOperationException("Expected a title text-entry keyboard.");
+                        Game1.textEntry.receiveGamePadButton(Microsoft.Xna.Framework.Input.Buttons.B);
+                        break;
                     case "present": PresentOnBothPanels(); break;
+                    case "title_list_fixture":
+                        if (Context.IsWorldReady || Game1.activeClickableMenu is not TitleMenu
+                            || TitleMenu.subMenu is not LoadGameMenu list || list.IsDoingTask())
+                            throw new InvalidOperationException("Settled title save list required.");
+                        for (int index = 0; index < 6; index++) list.MenuSlots.Add(new TitleListProbe(list, index));
+                        list.UpdateButtons();
+                        list.populateClickableComponentList();
+                        break;
                     case "fixture":
                         if (Context.IsWorldReady) throw new InvalidOperationException("Already in a world.");
                         Game1.game1.loadForNewGame();
@@ -298,17 +343,94 @@ namespace Rgdsplus.VerticalWorld
             finally { capture = captureId = null; }
         }
 
+        private sealed class TitleListProbe : LoadGameMenu.MenuSlot
+        {
+            private readonly int index;
+            internal TitleListProbe(LoadGameMenu menu, int index) : base(menu) => this.index = index;
+            public override void Activate() => throw new InvalidOperationException("UI pagination probe cannot load a save.");
+            public override void Draw(SpriteBatch b, int i) => Utility.drawTextWithShadow(b, "QA list row " + index,
+                Game1.smallFont, new Vector2(menu.slotButtons[i].bounds.X + 48, menu.slotButtons[i].bounds.Y + 48),
+                Game1.textColor);
+        }
+
         private static void Reply(string id, string error, string screenshot)
         {
             var menu = Game1.activeClickableMenu;
+            var customization = (menu is TitleMenu ? TitleMenu.subMenu : menu) as CharacterCustomization;
+            var keyboard = Game1.textEntry;
             var result = new
             {
                 id, error, screenshot, worldReady = Context.IsWorldReady, gameMode = Game1.gameMode, ticks,
                 eventUp = Game1.eventUp, dialogueUp = Game1.dialogueUp, fade = Game1.fadeToBlack || Game1.globalFade,
                 mode = DisplayModeController.State.Mode.ToString(), menu = menu?.GetType().Name,
+                subMenu = menu is TitleMenu ? TitleMenu.subMenu?.GetType().Name : null,
+                subMenuOk = TitleMenu.subMenu is AdvancedGameOptions advancedOptions ? ComponentInfo(advancedOptions.okButton) : null,
+                titleBack = ComponentInfo((menu as TitleMenu)?.backButton),
+                titleTextInput = TitleMenu.subMenu is TitleTextInputMenu input ? new
+                {
+                    field = ComponentInfo(input.textBoxCC), done = ComponentInfo(input.doneNamingButton),
+                    paste = ComponentInfo(input.pasteButton)
+                } : null,
+                advancedMenu = TitleMenu.subMenu is AdvancedGameOptions advanced ? new
+                {
+                    bounds = new { x = advanced.xPositionOnScreen, y = advanced.yPositionOnScreen, advanced.width, advanced.height },
+                    index = advanced.currentItemIndex, count = advanced.options.Count,
+                    rows = advanced.optionSlots.Select(ComponentInfo).ToArray(),
+                    up = ComponentInfo((ClickableComponent)AccessTools.Field(typeof(AdvancedGameOptions), "upArrow").GetValue(advanced)),
+                    down = ComponentInfo((ClickableComponent)AccessTools.Field(typeof(AdvancedGameOptions), "downArrow").GetValue(advanced)),
+                    elements = advanced.options.Select(option => new { type = option.GetType().Name, option.label,
+                        x = option.bounds.X, y = option.bounds.Y, width = option.bounds.Width, height = option.bounds.Height }).ToArray()
+                } : null,
+                loadMenu = TitleMenu.subMenu is LoadGameMenu load ? new
+                {
+                    bounds = new { x = load.xPositionOnScreen, y = load.yPositionOnScreen, load.width, load.height },
+                    index = load.currentItemIndex, count = load.MenuSlots.Count, busy = load.IsDoingTask(),
+                    slots = load.slotButtons.Select(ComponentInfo).ToArray(),
+                    kinds = load.MenuSlots.Select(slot => slot.GetType().Name).ToArray(),
+                    names = load.MenuSlots.Select(slot => slot is LoadGameMenu.SaveFileSlot file ? file.Farmer.Name : null).ToArray(),
+                    up = ComponentInfo(load.upArrow), down = ComponentInfo(load.downArrow),
+                    scroll = ComponentInfo(load.scrollBar), back = ComponentInfo(load.backButton),
+                    coop = load is CoopMenu co ? new { tab = co.currentTab.ToString(), join = ComponentInfo(co.joinTab),
+                        host = ComponentInfo(co.hostTab), refresh = ComponentInfo(co.refreshButton) } : null
+                } : null,
+                cursor = new { x = Game1.getMouseX(true), y = Game1.getMouseY(true) },
+                titleButtons = (menu as TitleMenu)?.buttons.Select(ComponentInfo).ToArray(),
+                character = customization == null ? null : new
+                {
+                    name = Game1.player.Name, farmName = Game1.player.farmName.Value,
+                    favorite = Game1.player.favoriteThing.Value, hair = Game1.player.hair.Value,
+                    skin = Game1.player.skin.Value, accessory = Game1.player.accessory.Value,
+                    male = Game1.player.IsMale,
+                    farmType = Game1.whichFarm,
+                    modFarm = Game1.whichModFarm?.Id,
+                    fields = new[] { customization.nameBoxCC, customization.farmnameBoxCC, customization.favThingBoxCC }.Select(ComponentInfo).ToArray(),
+                    left = customization.leftSelectionButtons.Select(ComponentInfo).ToArray(),
+                    right = customization.rightSelectionButtons.Select(ComponentInfo).ToArray(),
+                    gender = customization.genderButtons.Select(ComponentInfo).ToArray(),
+                    farms = customization.farmTypeButtons.Select(ComponentInfo).ToArray(),
+                    back = ComponentInfo(customization.backButton),
+                    advanced = ComponentInfo(customization.advancedOptionsButton),
+                    ok = ComponentInfo(customization.okButton)
+                },
+                keyboard = keyboard == null ? null : new
+                {
+                    keys = keyboard.keys.Select(ComponentInfo).ToArray(),
+                    ok = ComponentInfo(keyboard.okButton), backspace = ComponentInfo(keyboard.backspaceButton),
+                    space = ComponentInfo(keyboard.spaceButton)
+                },
                 tab = (menu as GameMenu)?.currentTab, uiWidth = Game1.uiViewport.Width, uiHeight = Game1.uiViewport.Height,
                 uiScale = Game1.options?.baseUIScale, zoom = Game1.options?.baseZoomLevel,
                 preferredUiScale = CompanionPreferences.Current.UiScale,
+                effectiveUiScale = Game1.options?.uiScale,
+                characterLayoutInstalled = CharacterCreationLayout.Installed,
+                titleMenuLayoutInstalled = TitleMenuLayout.Installed,
+                dialogue = menu is DialogueBox dialogue ? new
+                {
+                    dialogue.x, dialogue.y, dialogue.width, dialogue.height, dialogue.heightForQuestions,
+                    portrait = dialogue.isPortraitBox(), dialogue.isQuestion,
+                    text = dialogue.getCurrentString(), pages = dialogue.characterDialoguesBrokenUp.Count
+                } : null,
+                verticalWorldEnabled = VerticalWorldRenderer.Enabled,
                 hudDrawn = Game1.IsHudDrawn, displayHud = Game1.displayHUD, panMode = Game1.panMode,
                 freezeControls = Game1.freezeControls, hostPaused = Game1.HostPaused,
                 hudMenus = Game1.onScreenMenus.Select(item => item.GetType().Name).ToArray(),
@@ -336,5 +458,11 @@ namespace Rgdsplus.VerticalWorld
             File.WriteAllText(path + ".next", JsonSerializer.Serialize(result));
             File.Move(path + ".next", path, true);
         }
+
+        private static object ComponentInfo(ClickableComponent item) => item == null ? null : new
+        {
+            name = item.name, id = item.myID, visible = item.visible,
+            x = item.bounds.X, y = item.bounds.Y, width = item.bounds.Width, height = item.bounds.Height
+        };
     }
 }
