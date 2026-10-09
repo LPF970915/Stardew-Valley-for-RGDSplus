@@ -1,6 +1,6 @@
 # Stardew Valley for RGDSplus
 
-发布版本：`20261009-01`，双屏模组 `0.6.0-reference-v2`。
+发布版本：`20261009-02`，双屏模组 `0.6.0-reference-v2`。
 维护：Blood_roc。本包是非官方 RGDSplus 适配包，不是游戏本体。
 
 只提供 PortMaster 适配层、随包 ARM64 依赖和本地 Steam 资源导入工具。
@@ -15,7 +15,7 @@
    使用常规 Windows 主线分支，不使用 compatibility 分支。
    已验证版本为 `1.6.15.24356` / .NET `6.0.32`；其他游戏版本未实机验收。
 3. 电脑双击
-   `Ports/StardewVerticalWorldD2/StardewValleyMainline/steam-import/Import Steam Assets.cmd`，
+   `Ports/Stardew Valley for RGDSplus/steam-import/Import Steam Assets.cmd`，
    输入上述游戏安装目录。自动识别仅覆盖 Steam 默认库，自定义库请输入路径。
    工具在本地复制托管程序集、JSON/XML 与完整 `Content`，逐文件检查 SHA256；
    不登录 Steam、不读取账号、不执行 Windows 游戏程序。
@@ -27,16 +27,15 @@
 内存卡根目录/
   Ports/
     Stardew Valley for RGDSplus.sh
-    StardewVerticalWorldD2/
-      StardewValleyMainline/
-        StardewValleyMainline.sh
-        dlls/ dotnet/ gl4es.aarch64/ libs.aarch64/
-        tools/ overrides/ licenses/
-        Mods/RGDSplus.VerticalWorld/
-        steam-import/                 <- 电脑端本地导入工具
-        gamedata/                     <- 用户导入正版资源
-        savedata/                     <- 游戏运行后生成
-        RELEASE.json SHA256SUMS.txt
+    Stardew Valley for RGDSplus/
+      StardewValleyMainline.sh
+      dlls/ dotnet/ gl4es.aarch64/ libs.aarch64/
+      tools/ overrides/ licenses/
+      Mods/RGDSplus.VerticalWorld/
+      steam-import/                   <- 电脑端本地导入工具
+      gamedata/                       <- 用户导入正版资源
+      savedata/                       <- 游戏运行后生成
+      RELEASE.json SHA256SUMS.txt
 ```
 
 本包附带 .NET 6.0.32、SMAPI 4.5.2、PortMaster 游戏补丁器、
@@ -57,12 +56,11 @@ DLL、JSON/XML 放入 `gamedata`；推荐使用导入工具避免遗漏或混入
 合并覆盖适配文件，保留 `gamedata`、`savedata`、模组配置与历史记录。
 本包中的这两个空目录不会清空已有内容；不要先删除整个游戏目录。
 
-内部继续使用 `StardewVerticalWorldD2/StardewValleyMainline`，兼容旧版本。
-原先若多套了一层 `StardewVerticalWorldD2`，新入口会优先使用其中已有的游戏。
-这时应把发布包的 `StardewValleyMainline` 内适配文件合并到旧的实际运行目录，
-保留旧 `gamedata` 与 `savedata`；不要另外创建两份存档。
-新安装无需多套目录。旧 D2 入口可以保留作后备，或只删除旧的菜单脚本。
-请勿删除任何旧游戏目录来“清理”入口。
+新安装使用与菜单脚本同名的 `Stardew Valley for RGDSplus/` 文件夹，
+文件夹根目录直接就是运行文件，不再套 `StardewVerticalWorldD2` 或
+`StardewValleyMainline`。旧设备若已有 `StardewVerticalWorldD2` 目录，
+入口会在新目录没有完整正版资源时回退使用旧目录，避免分裂存档；
+后续升级可把新包根目录文件合并到旧实际运行目录。
 
 导入器遇到非空 `gamedata` 默认拒绝覆盖。需要更新正版资源时，在电脑 PowerShell 运行：
 

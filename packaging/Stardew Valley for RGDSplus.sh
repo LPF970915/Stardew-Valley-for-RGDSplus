@@ -1,11 +1,29 @@
 #!/bin/bash
 set -u
 PORTS_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P) || exit 1
-GAME_DIR="$PORTS_DIR/StardewVerticalWorldD2/StardewValleyMainline"
-LEGACY_DIR="$PORTS_DIR/StardewVerticalWorldD2/StardewVerticalWorldD2/StardewValleyMainline"
-# Prefer an installed legacy game over an empty new adapter; preserve its saves.
-if [ ! -r "$GAME_DIR/gamedata/Stardew Valley.dll" ] && [ -r "$LEGACY_DIR/gamedata/Stardew Valley.dll" ]; then
-  GAME_DIR="$LEGACY_DIR"
+GAME_DIR="$PORTS_DIR/Stardew Valley for RGDSplus"
+# New installs keep the launcher and payload in the same-named folder. If an
+# older card already has game data, use it rather than splitting the saves.
+if [ ! -r "$GAME_DIR/StardewValleyMainline.sh" ]; then
+  for candidate in \
+    "$PORTS_DIR/StardewVerticalWorldD2/StardewValleyMainline" \
+    "$PORTS_DIR/StardewVerticalWorldD2/StardewVerticalWorldD2/StardewValleyMainline"
+  do
+    if [ -r "$candidate/StardewValleyMainline.sh" ]; then
+      GAME_DIR="$candidate"
+      break
+    fi
+  done
+elif [ ! -r "$GAME_DIR/gamedata/Stardew Valley.dll" ]; then
+  for candidate in \
+    "$PORTS_DIR/StardewVerticalWorldD2/StardewValleyMainline" \
+    "$PORTS_DIR/StardewVerticalWorldD2/StardewVerticalWorldD2/StardewValleyMainline"
+  do
+    if [ -r "$candidate/StardewValleyMainline.sh" ] && [ -r "$candidate/gamedata/Stardew Valley.dll" ]; then
+      GAME_DIR="$candidate"
+      break
+    fi
+  done
 fi
 if [ ! -r "$GAME_DIR/StardewValleyMainline.sh" ]; then
   printf 'Missing Stardew Valley adapter: %s\n' "$GAME_DIR" >&2

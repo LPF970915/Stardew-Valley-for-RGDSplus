@@ -2,7 +2,7 @@
 
 ## Current Release - 2026-10-09
 
-当前发布包为 `20261009-01`，包含 PortMaster 适配层、ARM64 随包运行依赖和
+当前发布包为 `20261009-02`，包含 PortMaster 适配层、ARM64 随包运行依赖和
 Windows Steam 正版资源本地导入工具，不包含游戏本体、存档、账号或测试状态。
 菜单入口为 **Stardew Valley for RGDSplus**。将 ZIP 内 `Ports/` 合并到卡二根目录，
 再运行包内 `steam-import/Import Steam Assets.cmd` 导入自己购买的 Windows 主线版。
@@ -14,7 +14,7 @@ py -3 tools/build-release.py
 py -3 tools/test-release.py -v
 ```
 
-产物：`build/releases/20261009-01/Stardew Valley for RGDSplus.zip`，
+产物：`build/releases/20261009-02/Stardew Valley for RGDSplus.zip`，
 以及整体 SHA256 与审计 JSON。构建不会导入游戏，也不会联网获取本体。
 正常发布入口解除输出静音但保留音量；显式 QA 运行不解除测试静音。
 
@@ -46,7 +46,7 @@ Run tools/make-package.ps1 to create a POSIX tar.gz archive without game data. I
 
 ## RGDSplus card-two deployment
 
-RGDSplus scans the second card from `/mnt/sdcard/Ports` rather than the card-one `/roms/ports` tree. Run `tools/make-card2-package.ps1` to create the matching layout: `Ports/Stardew Valley for RGDSplus.sh` is the visible menu entry and `Ports/StardewValleyMainline/` contains the runtime, saves, logs, and `gamedata`. Copy the package to the card, then copy the prepared Windows game files into `StardewValleyMainline/gamedata/`. The launcher resolves its payload relative to the entry path, so it does not depend on the legacy PortMaster `directory` value.
+RGDSplus scans the second card from `/mnt/sdcard/Ports` rather than the card-one `/roms/ports` tree. The final release layout is intentionally flat: `Ports/Stardew Valley for RGDSplus.sh` is beside `Ports/Stardew Valley for RGDSplus/`, and that same-named folder directly contains the runtime, saves, logs, and `gamedata`. Copy the package to the card, then copy the prepared Windows game files into `Stardew Valley for RGDSplus/gamedata/`. The launcher resolves its payload relative to the entry path, so it does not depend on the legacy PortMaster `directory` value.
 
 ## Single-screen acceptance
 

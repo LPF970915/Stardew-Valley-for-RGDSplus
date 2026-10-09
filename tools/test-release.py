@@ -25,6 +25,9 @@ class ReleaseTests(unittest.TestCase):
     def test_collect_exact_release_policy(self):
         files = release.collect()
         manifest = json.loads(files[release.MANIFEST])
+        self.assertEqual(release.APP, "Ports/Stardew Valley for RGDSplus/")
+        self.assertIn(release.APP + "StardewValleyMainline.sh", files)
+        self.assertNotIn("Ports/StardewVerticalWorldD2/StardewValleyMainline.sh", files)
         self.assertFalse(manifest["gameAssetsIncluded"])
         self.assertFalse(manifest["testsEnabled"])
         self.assertTrue(manifest["audio"])
@@ -73,8 +76,10 @@ class ReleaseTests(unittest.TestCase):
     def test_entry_audio_policy_and_legacy_resolution(self):
         with tempfile.TemporaryDirectory(prefix="sdv-entry-test-") as tmp:
             base = Path(tmp)
-            game = base / "StardewVerticalWorldD2/StardewValleyMainline"
+            game = base / "Stardew Valley for RGDSplus"
             game.mkdir(parents=True)
+            (game / "gamedata").mkdir()
+            (game / "gamedata/Stardew Valley.dll").write_bytes(b"new legal test placeholder")
             stub = b"#!/bin/bash\nprintf 'GAME=%s WIDTH=%s HEIGHT=%s\\n' \"$PWD\" \"$DISPLAY_WIDTH\" \"$DISPLAY_HEIGHT\"\n"
             (game / "StardewValleyMainline.sh").write_bytes(stub)
             legacy = base / "StardewVerticalWorldD2/StardewVerticalWorldD2/StardewValleyMainline"
@@ -101,13 +106,26 @@ class ReleaseTests(unittest.TestCase):
                 result = subprocess.run(["wsl", "-d", "Ubuntu", "--exec", "bash", "-c", command],
                                         capture_output=True, text=True, encoding="utf-8", errors="replace")
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn("LEGACY WIDTH=2048 HEIGHT=768", result.stdout)
+                self.assertIn("GAME=/mnt/", result.stdout)
+                self.assertIn("WIDTH=2048 HEIGHT=768", result.stdout)
                 if qa_enabled:
                     self.assertFalse(log.exists(), "QA must not invoke mixer unmute")
                 else:
                     audio = log.read_text()
                     self.assertIn("amixer -q sset Master unmute", audio)
                     self.assertIn("pactl set-sink-mute @DEFAULT_SINK@ 0", audio)
+            # Remove the new same-named folder and verify the old nested install
+            # remains a supported fallback.
+            import shutil
+            shutil.rmtree(game)
+            log.unlink(missing_ok=True)
+            command = ("chmod +x " + prefix + '/mock/*; env PATH="' + linux +
+                       '/mock:$PATH" AUDIO_LOG=' + prefix + "/audio.log SDV_DUAL_UI_TEST_DIR='' "
+                       "/bin/bash " + prefix + "/entry.sh")
+            result = subprocess.run(["wsl", "-d", "Ubuntu", "--exec", "bash", "-c", command],
+                                    capture_output=True, text=True, encoding="utf-8", errors="replace")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("LEGACY WIDTH=2048 HEIGHT=768", result.stdout)
 
 
 if __name__ == "__main__":

@@ -8,14 +8,14 @@ import subprocess
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-BUILD = "20261009-01"
-APP = "Ports/StardewVerticalWorldD2/StardewValleyMainline/"
+BUILD = "20261009-02"
+APP = "Ports/Stardew Valley for RGDSplus/"
 ENTRY = "Ports/Stardew Valley for RGDSplus.sh"
 MANIFEST = APP + "RELEASE.json"
 CHECKSUMS = APP + "SHA256SUMS.txt"
 RUNTIME_DIRS = ("dlls", "dotnet", "gl4es.aarch64", "libs.aarch64",
                 "licenses", "overrides", "tools")
-EMPTY_DIRS = ("Ports/", "Ports/StardewVerticalWorldD2/", APP, APP + "gamedata/",
+EMPTY_DIRS = ("Ports/", APP, APP + "gamedata/",
               APP + "savedata/")
 SENSITIVE = (rb"github_pat_[A-Za-z0-9_]{20,}", rb"gh[pousr]_[A-Za-z0-9]{20,}",
              rb"-----BEGIN (?:OPENSSH|RSA|EC|DSA) PRIVATE KEY-----",
@@ -192,7 +192,7 @@ def build(output):
     output = Path(output).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     files = collect()
-    with zipfile.ZipFile(output, "x", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         for name in sorted(set(EMPTY_DIRS) | set(files)):
             info = zipfile.ZipInfo(name, (2026, 10, 9, 0, 0, 0))
             info.create_system = 3
