@@ -17,6 +17,7 @@ namespace Rgdsplus.VerticalWorld
             NativeTouch.Install(harmony);
             CharacterCreationLayout.Install(harmony);
             TitleMenuLayout.Install(harmony);
+            LetterLayout.Install(harmony);
             harmony.Patch(AccessTools.Method(typeof(Game1), nameof(Game1.CanShowPauseMenu)),
                 prefix: new HarmonyMethod(typeof(UiPatches), nameof(PauseMenuPrefix)));
             harmony.Patch(AccessTools.Method(typeof(Game1), "SetWindowSize"),

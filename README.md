@@ -1,8 +1,8 @@
 # Stardew Valley for RGDSplus
 
-## Current Release - 2026-10-09
+## Current Release - 2026-10-12
 
-当前发布包为 `20261009-02`，包含 PortMaster 适配层、ARM64 随包运行依赖和
+当前发布包为 `20261012-04`，包含 PortMaster 适配层、ARM64 随包运行依赖和
 Windows Steam 正版资源本地导入工具，不包含游戏本体、存档、账号或测试状态。
 菜单入口为 **Stardew Valley for RGDSplus**。将 ZIP 内 `Ports/` 合并到卡二根目录，
 再运行包内 `steam-import/Import Steam Assets.cmd` 导入自己购买的 Windows 主线版。
@@ -14,9 +14,26 @@ py -3 tools/build-release.py
 py -3 tools/test-release.py -v
 ```
 
-产物：`build/releases/20261009-02/Stardew Valley for RGDSplus.zip`，
+产物：`build/releases/20261012-04/Stardew Valley for RGDSplus.zip`，
 以及整体 SHA256 与审计 JSON。构建不会导入游戏，也不会联网获取本体。
 正常发布入口解除输出静音但保留音量；显式 QA 运行不解除测试静音。
+启动前检测 PulseAudio；固件音频服务启动失败时，直接打开 RGDSplus 扬声器 PCM，
+绕过导致崩溃的环绕声插件探测。诊断记录在游戏目录 `logs/audio-*`。
+
+世界画面恢复原始分辨率和垂直同步，绘制目标为 30 帧，逻辑更新保持原来的 60 Hz。
+在 100% 游戏缩放下，连续双屏世界为 `1024x1536`，最终物理帧仍为 `2048x768`。
+原画质下减少透明像素混合开销；不启用 RGA 或低分辨率放大。
+实测范围及仍存在的密集场景、首次动作长帧见 [原画质 30 帧记录](docs/PERFORMANCE_NATIVE30_20261012.zh-CN.md)。
+`20261012-04` 默认启用首次工具动作预热，启动约增加 2 秒。用户手动实机复测后确认基本达到游玩要求。
+三类工具首用对照已通过；此前自动长测中的密树回退、内存趋势和偶发长帧仍保留为已知限制。
+未采用出帧节奏试验。完整结果与本次启用说明见 [首用与帧间隔记录](docs/PERFORMANCE_FOLLOWUP_20261012.zh-CN.md)。
+
+邮件窗口已适配下屏并保留附件/任务交互；单屏模式下屏导航末尾增加 MOD 和退出页。
+MOD 开关在退出到桌面并重新进入后生效，退出页支持返回标题或掌机系统。
+返回标题会重新加载游戏，以避开原生切换时的内存峰值；此过程保留本次 MOD 启用集合。
+
+仓库保留生产源码、发布脚本、回归测试和验收报告。一次性设备实验已移出维护目录；
+测试入口及本地资料管理说明见 [开发与验证工具](tools/README.zh-CN.md)。
 
 ## Verified Dual-Screen Baseline
 

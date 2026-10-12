@@ -1,4 +1,6 @@
 import importlib.util
+import sys
+from types import SimpleNamespace
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -51,6 +53,27 @@ class GuardTests(unittest.TestCase):
             return b'SDV_SESSION_TOKEN=/tmp/other/run\0'
         with patch.object(Path, 'read_text', read_text), patch.object(Path, 'read_bytes', read_bytes):
             self.assertIsNone(guard.game_identity(Path('/tmp/session/run'), Path('/game')))
+
+    def test_title_relaunch_keeps_guard_until_launcher_exits(self):
+        owner = (10, 'owner')
+        old, replacement = (20, 'old'), (30, 'replacement')
+        owner_checks = iter([True, True, True, False])
+        def alive(target):
+            return next(owner_checks) if target == owner else target == replacement
+        with patch.dict(sys.modules, {'fcntl': SimpleNamespace()}), \
+             patch.object(guard.signal, 'SIGHUP', 1, create=True), \
+             patch.object(guard.signal, 'signal'), \
+             patch.object(guard, 'process', return_value=('owner', 'S')), \
+             patch.object(guard, 'alive', side_effect=alive), \
+             patch.object(guard, 'game_identity', side_effect=[old, None, replacement]), \
+             patch.object(guard.glob, 'glob', return_value=[]), \
+             patch.object(guard.select, 'select', return_value=([], [], [])), \
+             patch.object(guard, 'pause_menus'), \
+             patch.object(guard, 'resume_menus') as resume, \
+             patch.object(guard, 'terminate') as terminate:
+            guard.run(Path('/tmp/session/run'), owner[0], Path('/game'))
+            terminate.assert_called_once_with(replacement)
+            resume.assert_called_once()
 
 
 if __name__ == '__main__':

@@ -57,6 +57,15 @@ cd "$GAMEDIR"
 > "$GAMEDIR/log.txt" && exec > >(tee "$GAMEDIR/log.txt") 2>&1
 echo "Display environment: DISPLAY_WIDTH=${DISPLAY_WIDTH:-<unset>} DISPLAY_HEIGHT=${DISPLAY_HEIGHT:-<unset>}"
 
+# OpenAL aborts before showing a window when the firmware audio server is down.
+# Recover it before acquiring input/display state, and retain startup diagnostics.
+if [ "${SDV_DUAL_SCREEN_VERTICAL_WORLD:-0}" = "1" ]; then
+  if ! python3 "$gamedir/tools/rgds-audio.py" --log-dir "$gamedir/logs"; then
+    cat "$gamedir/log.txt" > /dev/tty0
+    exit 1
+  fi
+fi
+
 # RGDSplus exposes the lower touchscreen through the session-scoped firmware
 # switch. Keep the previous value and restore it only if this session still
 # owns the active value; this avoids changing the system menu's later choice.
@@ -218,6 +227,9 @@ fi
 
 export MONOGAME_PATCH="$smapi_patch_path"
 if [ "$launch_mode" = "smapi" ]; then
+  if ! python3 "$gamedir/tools/rgds-mod-state.py" --mods "$modsdir"; then
+    echo "[mods] Could not apply queued choices; retaining the current MOD folders."
+  fi
   export SMAPI_MODS_PATH="$modsdir"
   export SMAPI_USE_CURRENT_SHELL=true
 else
@@ -230,12 +242,21 @@ cd "$gamedir/gamedata"
 $GPTOKEYB "$DOTNET_ROOT/dotnet" &
 gptokeyb_pid=$!
 command -v pm_platform_helper >/dev/null 2>&1 && pm_platform_helper "$DOTNET_ROOT/dotnet"
-"$DOTNET_ROOT/dotnet" "$entry_assembly" &
-game_pid=$!
-if [ -n "$session_path" ]; then printf '%s\n' "$game_pid" >"$session_path.game.pid"; fi
-wait "$game_pid"
-game_status=$?
-echo "Stardew Valley exited with status ${game_status}."
+while :; do
+  "$DOTNET_ROOT/dotnet" "$entry_assembly" &
+  game_pid=$!
+  if [ -n "$session_path" ]; then printf '%s\n' "$game_pid" >"$session_path.game.pid"; fi
+  wait "$game_pid"
+  game_status=$?
+  echo "Stardew Valley exited with status ${game_status}."
+  # Only a normal exit plus an explicit request from this exact child restarts.
+  # MOD choices apply once above, so returning to title retains this session's set.
+  if [ "$game_status" -ne 0 ] || [ -z "$session_path" ] ||
+     [ -f "$session_path.exit-requested" ] ||
+     [ "$(cat "$session_path.return-title" 2>/dev/null)" != "$game_pid" ]; then break; fi
+  rm -f -- "$session_path.return-title"
+  echo "Restarting Stardew Valley at the title screen."
+done
 
 if command -v pm_finish >/dev/null 2>&1; then
   pm_finish

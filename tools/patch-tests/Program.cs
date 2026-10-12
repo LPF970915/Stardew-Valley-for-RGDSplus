@@ -19,7 +19,28 @@ AssemblyLoadContext.Default.Resolving += (context, name) => {
     return null;
 };
 Environment.SetEnvironmentVariable("SDV_DUAL_SCREEN_VERTICAL_WORLD", "1");
+Environment.SetEnvironmentVariable("SDV_TARGET_FPS", "30");
+Environment.SetEnvironmentVariable("SDV_WORLD_ALPHA_DISCARD", "1");
+Environment.SetEnvironmentVariable("SDV_TREE_TRIM", "1");
 var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(modPath);
+using (var manifest = assembly.GetManifestResourceStream("Rgdsplus.FirstUseMethods.txt")
+    ?? throw new Exception("First-use warmup resource missing from packaged DLL"))
+using (var reader = new StreamReader(manifest))
+{
+    string embedded = reader.ReadToEnd().Replace("\r\n", "\n");
+    string source = File.ReadAllText(Path.Combine(root, "dualscreen/VerticalWorld/FirstUseMethods.txt")).Replace("\r\n", "\n");
+    if (embedded != source) throw new Exception("First-use manifest differs from source");
+}
+var warmupType = assembly.GetType("Rgdsplus.VerticalWorld.FirstUseWarmup", true);
+var warmupEnabled = warmupType.GetProperty("Enabled", BindingFlags.Static | BindingFlags.NonPublic);
+foreach (string value in new[] { "1", "0" })
+{
+    Environment.SetEnvironmentVariable("SDV_FIRST_USE_WARMUP", value);
+    if ((bool)warmupEnabled.GetValue(null) != (value == "1"))
+        throw new Exception("First-use warmup override is ineffective");
+}
+Environment.SetEnvironmentVariable("SDV_FIRST_USE_WARMUP", null);
+Console.WriteLine("PASS: packaged first-use manifest matches source and warmup can be enabled or disabled.");
 var entry = assembly.GetType("Rgdsplus.VerticalWorld.ModEntry", true);
 string logPath = Path.Combine(root, "build/patch-install-test.log");
 entry.GetField("LogPath", BindingFlags.Static | BindingFlags.NonPublic).SetValue(null, logPath);
@@ -56,6 +77,102 @@ const BindingFlags hiddenStatic = BindingFlags.Static | BindingFlags.NonPublic;
 const BindingFlags hiddenInstance = BindingFlags.Instance | BindingFlags.NonPublic;
 object Blank(Type type) => System.Runtime.Serialization.FormatterServices.GetUninitializedObject(type);
 void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
+var cadenceType = assembly.GetType("Rgdsplus.VerticalWorld.DrawCadence", true);
+var advance = cadenceType.GetMethod("Advance", hiddenInstance);
+object cadence = Activator.CreateInstance(cadenceType, true);
+const long updateStep = 166667;
+long renderedTicks = 0;
+int renderedCount = 0;
+for (int tick = 1; tick <= 600; tick++)
+{
+    object[] call = { tick * updateStep, updateStep, updateStep, 0L };
+    if ((bool)advance.Invoke(cadence, call)) { renderedCount++; renderedTicks += (long)call[3]; }
+}
+Check(renderedCount == 301 && renderedTicks == 600 * updateStep, "30 Hz draw pacing loses animation time or changes its rate");
+// A long frame consumes its accumulated time once and skips expired deadlines.
+object[] stalled = { 660 * updateStep, 60 * updateStep, updateStep, 0L };
+Check((bool)advance.Invoke(cadence, stalled) && (long)stalled[3] == 60 * updateStep, "Long-frame elapsed time is lost");
+object[] afterStall = { 661 * updateStep, updateStep, updateStep, 0L };
+Check(!(bool)advance.Invoke(cadence, afterStall), "Pacing bursts after a missed deadline");
+object[] reset = { updateStep, updateStep, updateStep, 0L };
+Check((bool)advance.Invoke(cadence, reset) && (long)reset[3] == updateStep, "Clock reset leaves stale pending time");
+Console.WriteLine("PASS: 30 Hz draws preserve elapsed time, skip expired deadlines, and recover from a clock reset.");
+var graphicsTypes = Assembly.Load("MonoGame.Framework");
+var engineGame = graphicsTypes.GetType("Microsoft.Xna.Framework.Game", true);
+var engineClock = graphicsTypes.GetType("Microsoft.Xna.Framework.GameTime", true);
+var runner = Blank(gameAssembly.GetType("StardewValley.GameRunner", true));
+engineGame.GetField("_targetElapsedTime", hiddenInstance).SetValue(runner, TimeSpan.FromTicks(updateStep));
+engineGame.GetProperty("IsFixedTimeStep").SetValue(runner, true);
+var clock = Activator.CreateInstance(engineClock);
+var clockAlias = clock;
+var framePacing = assembly.GetType("Rgdsplus.VerticalWorld.FramePacing", true);
+for (int tick=1;tick<=4;tick++)
+{
+    engineClock.GetProperty("TotalGameTime").SetValue(clock, TimeSpan.FromTicks(tick*updateStep));
+    engineClock.GetProperty("ElapsedGameTime").SetValue(clock, TimeSpan.FromTicks(updateStep));
+    object[] call = { runner, clock, null };
+    bool draw = (bool)framePacing.GetMethod("BeforeDraw", hiddenStatic).Invoke(null, call);
+    Check(draw == (tick != 3), "Real pacing prefix did not skip the alternate update");
+    if (tick==4) Check(((TimeSpan)engineClock.GetProperty("ElapsedGameTime").GetValue(clockAlias)).Ticks == 2*updateStep,
+        "Global clock alias and Draw argument disagree about elapsed time");
+    framePacing.GetMethod("AfterDraw", hiddenStatic).Invoke(null, new[] {clock,call[2]});
+    Check(((TimeSpan)engineClock.GetProperty("ElapsedGameTime").GetValue(clock)).Ticks == updateStep,
+        "Draw finalizer did not restore the engine update clock");
+}
+Console.WriteLine("PASS: Draw and its clock aliases share elapsed time; the finalizer restores the update clock.");
+var stripRectangle = graphicsTypes.GetType("Microsoft.Xna.Framework.Rectangle", true);
+var sourceRegion = Activator.CreateInstance(stripRectangle, 16, 8, 48, 96);
+var packedPixels = new uint[80 * 120];
+for (int y = 8; y < 104; y++) for (int x = 16; x < 64; x++)
+    if (y < 70 && x >= 24 && x < 52 || y >= 70 && x >= 36 && x < 40)
+        packedPixels[y*80+x] = 0xff135724;
+packedPixels[8*80+16] = 1; // Zero alpha with nonzero RGB must still survive.
+packedPixels[103*80+63] = 0xff000000;
+var trimType = assembly.GetType("Rgdsplus.VerticalWorld.TreeSpriteTrim", true);
+var findStrips = trimType.GetMethod("FindStrips", hiddenStatic);
+var strips = (Array)findStrips.Invoke(null, new object[] { packedPixels, 80, sourceRegion });
+for (int y = 8; y < 104; y++) for (int x = 16; x < 64; x++)
+{
+    int coverage = 0;
+    foreach (var strip in strips)
+        if ((bool)stripRectangle.GetMethod("Contains", new[] { typeof(int), typeof(int) }).Invoke(strip, new object[] { x, y })) coverage++;
+    Check(coverage <= 1, "Canopy strips overlap and double-blend a pixel");
+    Check(packedPixels[y*80+x] == 0 || coverage == 1, "Canopy trimming removes a visible or nonzero-RGB texel");
+}
+Check(strips.Length > 1 && strips.Length <= 6, "Sparse canopy was not split into bounded strips");
+Array.Fill(packedPixels, 0xffffffff);
+strips = (Array)findStrips.Invoke(null, new object[] { packedPixels, 80, sourceRegion });
+Check(strips.Length == 1 && strips.GetValue(0).Equals(sourceRegion), "Opaque texture should retain one quad");
+Console.WriteLine("PASS: canopy cropping retains every nonzero texel, avoids overlaps, and keeps dense rectangles unsplit.");
+if (Environment.GetEnvironmentVariable("SDV_WORLD_RENDER_SCALE") == "0.625")
+{
+    var quality = assembly.GetType("Rgdsplus.VerticalWorld.WorldRenderQuality", true);
+    var graphics = Assembly.Load("MonoGame.Framework");
+    var rasterTextureType = graphics.GetType("Microsoft.Xna.Framework.Graphics.Texture2D", true);
+    var targetType = graphics.GetType("Microsoft.Xna.Framework.Graphics.RenderTarget2D", true);
+    var rectangleType = graphics.GetType("Microsoft.Xna.Framework.Rectangle", true);
+    object Rect(int x, int y, int w, int h) => Activator.CreateInstance(rectangleType, x, y, w, h);
+    var source = quality.GetMethod("Source", hiddenStatic);
+    var register = quality.GetMethod("Register", hiddenStatic);
+    foreach (int logicalHeight in new[] { 768, 1024, 1536, 2048, 3072 })
+    {
+        var target = Blank(targetType);
+        int physicalHeight = (int)Math.Round(logicalHeight * .625);
+        rasterTextureType.GetField("width", hiddenInstance).SetValue(target, 640);
+        rasterTextureType.GetField("height", hiddenInstance).SetValue(target, physicalHeight);
+        register.Invoke(null, new object[] { target, 1024, logicalHeight });
+        var top = source.Invoke(null, new[] { target, Rect(0, 0, 1024, logicalHeight / 2) });
+        var bottom = source.Invoke(null, new[] { target, Rect(0, logicalHeight / 2, 1024, logicalHeight / 2) });
+        int Value(object rect, string name) => (int)rectangleType.GetProperty(name)?.GetValue(rect)!;
+        Check(Value(top, "Bottom") == Value(bottom, "Top") && Value(bottom, "Bottom") == physicalHeight,
+            "Reduced raster leaves a seam or loses the bottom edge");
+        Check((int)rectangleType.GetField("Width").GetValue(top) == 640, "Reduced source width is incorrect");
+        quality.GetMethod("Clear", hiddenStatic).Invoke(null, null);
+        var unchanged = source.Invoke(null, new[] { target, Rect(0, 0, 1024, logicalHeight) });
+        Check((int)rectangleType.GetField("Width").GetValue(unchanged) == 1024, "Released target still has stale logical geometry");
+    }
+    Console.WriteLine("PASS: reduced raster source rectangles share exact seams, cover the full texture, and release metadata.");
+}
 var controller = assembly.GetType("Rgdsplus.VerticalWorld.DisplayModeController", true);
 var state = controller.GetField("State", hiddenStatic).GetValue(null);
 state.GetType().GetMethod("TryToggle", hiddenInstance).Invoke(state, new object[] { true });
@@ -124,11 +241,11 @@ foreach (float scale in new[] { .75f, 1f, 1.25f, 1.5f })
     var viewport = gameType.GetField("uiViewport").GetValue(null);
     int width = (int)viewport.GetType().GetProperty("Width").GetValue(viewport);
     int height = (int)viewport.GetType().GetProperty("Height").GetValue(viewport);
-    for (int active = 0; active < 12; active++)
+    for (int active = 0; active < 14; active++)
     {
         dashboard.GetMethod("Reveal", hiddenStatic).Invoke(null, new object[] { active });
         int rightEdge=0, visible=0;
-        for(int page=0;page<12;page++)
+        for(int page=0;page<14;page++)
         {
             var rect=dashboard.GetMethod("NavBounds",hiddenStatic).Invoke(null,new object[]{page});
             if(Coordinate(rect,"Width")==0)continue;
@@ -433,3 +550,16 @@ finally
     optionsType.GetField("baseUIScale").SetValue(options, savedDialogueScale);
 }
 Console.WriteLine("PASS: dialogue body, native outer corners and portrait text fit both modes at 75%-150%, without changing short boxes or screenshot mode.");
+
+var letterLayout = assembly.GetType("Rgdsplus.VerticalWorld.LetterLayout", true);
+foreach(float scale in new[] {.75f,1f,1.25f,1.5f})
+{
+    optionsType.GetField("baseUIScale").SetValue(options,scale);
+    uiPatches.GetMethod("EnsureViewports",hiddenStatic).Invoke(null,null);
+    var vp = gameType.GetField("uiViewport").GetValue(null);
+    int vw=(int)vp.GetType().GetProperty("Width").GetValue(vp), vh=(int)vp.GetType().GetProperty("Height").GetValue(vp);
+    int lw=(int)letterLayout.GetMethod("FitWidth",hiddenStatic).Invoke(null,new object[]{1280});
+    int lh=(int)letterLayout.GetMethod("FitHeight",hiddenStatic).Invoke(null,new object[]{720});
+    Check(lw+64<=vw && lh+64<=vh && lw>=800 && lh>=500,"Letter bounds exceed the viewport or become unreadable");
+}
+Console.WriteLine("PASS: mail geometry fits at all supported UI scales with room for close and attachment controls.");

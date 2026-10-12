@@ -79,6 +79,23 @@ namespace Rgdsplus.VerticalWorld
                 switch (data.GetProperty("action").GetString())
                 {
                     case "status": break;
+                    case "letter_probe":
+                        if (!fixtureActive) throw new InvalidOperationException("In-memory fixture required.");
+                        fixtureSettlesUntil = 0;
+                        string letterText = string.Join("^", Enumerable.Repeat("亲爱的农场主：欢迎来到星露谷。记得照顾农场里的作物，也别忘了来镇上看看朋友。祝你在这里度过美好的一天！", 10));
+                        string letterKind = data.GetProperty("kind").GetString();
+                        var letter = letterKind == "item" ? new LetterViewerMenu(letterText + "%item object 388 5 %%", "RGDS.QA.Letter", false)
+                            : letterKind == "quest" ? new LetterViewerMenu(letterText + "%item quest 100 %%", "RGDS.QA.Letter", false)
+                            : new LetterViewerMenu(letterText);
+                        letter.scale = 1f;
+                        Game1.activeClickableMenu = letter;
+                        break;
+                    case "page":
+                        if (!fixtureActive || !DisplayModeController.Expanded) throw new InvalidOperationException("Expanded fixture required.");
+                        int requestedPage = data.GetProperty("page").GetInt32();
+                        if (requestedPage < 0 || requestedPage >= Dashboard.PageCount) throw new ArgumentOutOfRangeException("page");
+                        DisplayModeController.OpenPage(requestedPage);
+                        break;
                     case "dialogue_probe":
                         if (!fixtureActive) throw new InvalidOperationException("In-memory fixture required.");
                         fixtureSettlesUntil = 0;
@@ -107,7 +124,7 @@ namespace Rgdsplus.VerticalWorld
                         Game1.dialogueUp = false;
                         break;
                     case "fixture_quit":
-                        if (!fixtureActive) throw new InvalidOperationException("In-memory fixture required.");
+                        if (!fixtureActive && Context.IsWorldReady) throw new InvalidOperationException("In-memory fixture or title required.");
                         Game1.game1.Exit();
                         break;
                     case "title_keyboard_cancel":
@@ -274,7 +291,7 @@ namespace Rgdsplus.VerticalWorld
                         if (ui < .75f || ui > 1.5f || zoom < .5f || zoom > 1.5f)
                             throw new ArgumentOutOfRangeException("scale");
                         Game1.options.singlePlayerDesiredUIScale = Game1.options.localCoopDesiredUIScale = Game1.options.baseUIScale = ui;
-                        Game1.options.baseZoomLevel = zoom;
+                        Game1.options.desiredBaseZoomLevel = Game1.options.baseZoomLevel = zoom;
                         UiPatches.EnsureViewports();
                         Game1.activeClickableMenu?.gameWindowSizeChanged(Rectangle.Empty, Rectangle.Empty); break;
                     case "language":
@@ -424,6 +441,13 @@ namespace Rgdsplus.VerticalWorld
                 effectiveUiScale = Game1.options?.uiScale,
                 characterLayoutInstalled = CharacterCreationLayout.Installed,
                 titleMenuLayoutInstalled = TitleMenuLayout.Installed,
+                letter = menu is LetterViewerMenu mail ? new {
+                    mail.page, pages=mail.mailMessage.Count, text=string.Join("",mail.mailMessage),
+                    close=ComponentInfo(mail.upperRightCloseButton), back=ComponentInfo(mail.backButton), forward=ComponentInfo(mail.forwardButton),
+                    accept=ComponentInfo(mail.acceptQuestButton), items=mail.itemsToGrab.Select(ComponentInfo).ToArray(),
+                    mail.questID, mail.destroy
+                } : null,
+                modManagement = DisplayModeController.Expanded && DisplayModeController.SelectedPage == 12 ? ModManagement.Status() : null,
                 dialogue = menu is DialogueBox dialogue ? new
                 {
                     dialogue.x, dialogue.y, dialogue.width, dialogue.height, dialogue.heightForQuestions,
@@ -431,6 +455,14 @@ namespace Rgdsplus.VerticalWorld
                     text = dialogue.getCurrentString(), pages = dialogue.characterDialoguesBrokenUp.Count
                 } : null,
                 verticalWorldEnabled = VerticalWorldRenderer.Enabled,
+                worldRenderScale = WorldRenderQuality.Scale,
+                targetDrawRate = FramePacing.Enabled ? 30 : 0,
+                worldAlphaDiscard = WorldSpriteEffect.Enabled,
+                treeTrim = TreeSpriteTrim.Enabled,
+                treeStripHeight = TreeSpriteTrim.StripHeight,
+                swapInterval = WorldRenderQuality.SwapInterval,
+                worldRasterWidth = VerticalWorldRenderer.WorldRasterWidth,
+                worldRasterHeight = VerticalWorldRenderer.WorldRasterHeight,
                 hudDrawn = Game1.IsHudDrawn, displayHud = Game1.displayHUD, panMode = Game1.panMode,
                 freezeControls = Game1.freezeControls, hostPaused = Game1.HostPaused,
                 hudMenus = Game1.onScreenMenus.Select(item => item.GetType().Name).ToArray(),

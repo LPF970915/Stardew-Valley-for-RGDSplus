@@ -7,6 +7,7 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using HarmonyLib;
 using Microsoft.Xna.Framework;
@@ -27,12 +28,13 @@ public sealed class ModEntry : Mod
     private static long pendingWarpAt;
     private static readonly Dictionary<MethodBase, int> indices = new();
     private static readonly List<string> names = new();
-    private static readonly long[] elapsed = new long[32], allocated = new long[32], calls = new long[32];
-    private static readonly long[] firstElapsed = new long[32], maxElapsed = new long[32], firstAllocated = new long[32];
+    private const int MethodCapacity = 64;
+    private static readonly long[] elapsed = new long[MethodCapacity], allocated = new long[MethodCapacity], calls = new long[MethodCapacity];
+    private static readonly long[] firstElapsed = new long[MethodCapacity], maxElapsed = new long[MethodCapacity], firstAllocated = new long[MethodCapacity];
     private static readonly double[] frames = new double[20000];
     private static readonly bool[] actionFrames = new bool[20000];
     private static readonly long[] frameAllocated = new long[20000], frameGc0 = new long[20000], frameGc1 = new long[20000], frameGc2 = new long[20000];
-    private static readonly long[,] frameMethodTicks = new long[20000, 32];
+    private static readonly long[,] frameMethodTicks = new long[20000, MethodCapacity];
     private static long frameTotalAllocated;
     private static readonly int[] frameCollections = new int[3];
     private static readonly bool tickOnly = Environment.GetEnvironmentVariable("SDV_PERF_TICK_ONLY") == "1";
@@ -43,10 +45,22 @@ public sealed class ModEntry : Mod
     private static TimeSpan lastJitTime;
     private static long lastJitMethods;
     private static bool measuring, actionFrame, runActions;
+    private static bool drewThisTick;
+    private static bool presentationFeedback;
+    private static JitTrace jitTrace;
+    [DllImport("rgds-presentation-qa")] private static extern int rgds_presentation_init();
+    [DllImport("rgds-presentation-qa")] private static extern void rgds_presentation_start();
+    [DllImport("rgds-presentation-qa")] private static extern void rgds_presentation_before();
+    [DllImport("rgds-presentation-qa")] private static extern void rgds_presentation_after();
+    [DllImport("rgds-presentation-qa")] private static extern int rgds_presentation_stop(string path);
     private static int count, active, actions, initialObjects, maxDebris, maxSprites;
     private static long start, lastFrame, globalAllocated, pollAt, actionAt, releaseAt;
     private static readonly int[] collections = new int[3];
     private static readonly List<object> actionEvents = new();
+    private static Action installRenderDetail;
+    private static bool renderDetailInstalled;
+    private static Action installObjectDetail;
+    private static bool objectDetailInstalled;
     public struct Timing { public long Start, Allocated; public bool Enabled; }
 
     public override void Entry(IModHelper helper)
@@ -54,6 +68,7 @@ public sealed class ModEntry : Mod
         directory = Environment.GetEnvironmentVariable("SDV_DUAL_PERF_TEST_DIR");
         if (string.IsNullOrWhiteSpace(directory) || string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("SDV_DUAL_UI_TEST_DIR"))) return;
         Directory.CreateDirectory(directory);
+        if (Environment.GetEnvironmentVariable("SDV_QA_JIT_TRACE") == "1") jitTrace = new JitTrace();
         input = helper.Input;
         helper.Events.GameLoop.GameLaunched += (_, _) => Initialize();
         helper.Events.GameLoop.UpdateTicking += (_, _) =>
@@ -68,16 +83,28 @@ public sealed class ModEntry : Mod
         var assembly = AppDomain.CurrentDomain.GetAssemblies().Single(a => a.GetName().Name == "VerticalWorld");
         fixture = assembly.GetType("Rgdsplus.VerticalWorld.UiTestDriver").GetField("fixtureActive", BindingFlags.NonPublic | BindingFlags.Static);
         var harmony = new Harmony("RGDSplus.PerformanceProbe");
+        if (File.Exists(Path.Combine(directory, "librgds-presentation-qa.so")))
+        {
+            NativeLibrary.SetDllImportResolver(typeof(ModEntry).Assembly, (name, _, _) => name == "rgds-presentation-qa"
+                ? NativeLibrary.Load(Path.Combine(directory, "librgds-presentation-qa.so")) : IntPtr.Zero);
+            presentationFeedback = rgds_presentation_init() == 1;
+            if (presentationFeedback) harmony.Patch(AccessTools.Method(typeof(Game), "EndDraw"),
+                new HarmonyMethod(typeof(ModEntry), nameof(PresentationBefore)), new HarmonyMethod(typeof(ModEntry), nameof(PresentationAfter)));
+            File.WriteAllText(Path.Combine(directory, "presentation-ready.json"), JsonSerializer.Serialize(new { presentationFeedback }));
+        }
         void Patch(Type type, string name)
         {
             foreach (var method in type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly).Where(m => m.Name == name))
             {
                 if (names.Count >= elapsed.Length) throw new InvalidOperationException("Performance method capacity exceeded.");
+                if (indices.ContainsKey(method)) continue;
                 indices.Add(method, names.Count); names.Add(type.Name + "." + name);
                 harmony.Patch(method, new HarmonyMethod(typeof(ModEntry), nameof(Begin)), new HarmonyMethod(typeof(ModEntry), nameof(End)));
             }
         }
         Patch(typeof(Game), "Tick");
+        harmony.Patch(AccessTools.Method(typeof(GameRunner), "Draw"),
+            prefix: new HarmonyMethod(typeof(ModEntry), nameof(ObserveDraw)));
         if (!tickOnly)
         {
         foreach (string n in new[] { "DoUpdate", "DoDraw", "EndDraw" }) Patch(typeof(Game), n);
@@ -89,6 +116,32 @@ public sealed class ModEntry : Mod
         Patch(typeof(Axe), "DoFunction"); Patch(typeof(Pickaxe), "DoFunction");
         foreach (var type in new[] { typeof(GameLocation), typeof(TerrainFeature), typeof(Tree), typeof(Grass), typeof(HoeDirt), typeof(StardewValley.Object), typeof(ResourceClump), typeof(Fence), typeof(Bush) })
             Patch(type, "performToolAction");
+        installRenderDetail = () =>
+        {
+            Guard();
+            if (measuring || renderDetailInstalled) return;
+            Patch(typeof(StardewValley.Object), "draw");
+            var graphics = typeof(Microsoft.Xna.Framework.Graphics.Texture2D).Assembly;
+            Patch(graphics.GetType("Microsoft.Xna.Framework.Graphics.SpriteBatcher"), "DrawBatch");
+            Patch(graphics.GetType("Microsoft.Xna.Framework.Graphics.SpriteBatcher"), "FlushVertexArray");
+            Patch(graphics.GetType("Microsoft.Xna.Framework.Graphics.VertexDeclaration"), "Apply");
+            Patch(graphics.GetType("Microsoft.Xna.Framework.Graphics.TextureCollection"), "SetTextures");
+            Patch(graphics.GetType("Microsoft.Xna.Framework.Graphics.GraphicsDevice"), "ApplyState");
+            renderDetailInstalled = true;
+        };
+        installObjectDetail = () =>
+        {
+            Guard();
+            if (measuring || objectDetailInstalled) return;
+            foreach (var n in new[] { "draw", "GetBoundingBoxAt", "isPassable", "IsSprinkler", "GetBaseRadiusForSprinkler" })
+                Patch(typeof(StardewValley.Object), n);
+            foreach (var n in new[] { "get_QualifiedItemId", "get_ItemId" }) Patch(typeof(Item), n);
+            foreach (var n in new[] { "GetDataOrErrorItem", "GetMetadata" }) Patch(typeof(ItemRegistry), n);
+            var parsed = typeof(ItemRegistry).Assembly.GetType("StardewValley.ItemTypeDefinitions.ParsedItemData");
+            foreach (var n in new[] { "GetTexture", "GetSourceRect" }) Patch(parsed, n);
+            Patch(typeof(Microsoft.Xna.Framework.Graphics.SpriteBatch), "Draw");
+            objectDetailInstalled = true;
+        };
         }
         lastJitTime = JitInfo.GetCompilationTime(true);
         lastJitMethods = JitInfo.GetCompiledMethodCount(true);
@@ -101,6 +154,9 @@ public sealed class ModEntry : Mod
         __state.Allocated = GC.GetAllocatedBytesForCurrentThread(); __state.Start = Stopwatch.GetTimestamp();
         if (__originalMethod.DeclaringType == typeof(MeleeWeapon) || __originalMethod.DeclaringType == typeof(Axe) || __originalMethod.DeclaringType == typeof(Pickaxe)) actionFrame = true;
     }
+    private static void ObserveDraw() { if (measuring) drewThisTick = true; }
+    private static void PresentationBefore() => rgds_presentation_before();
+    private static void PresentationAfter() => rgds_presentation_after();
     private static void End(MethodBase __originalMethod, Timing __state)
     {
         if (!measuring || !__state.Enabled) return;
@@ -113,6 +169,8 @@ public sealed class ModEntry : Mod
         if (duration > maxElapsed[i]) maxElapsed[i] = duration;
         if (count < frames.Length) frameMethodTicks[count, i] += duration;
         if (names[i] != "Game.Tick") return;
+        if (!drewThisTick) return;
+        drewThisTick = false;
         TimeSpan jitTime = JitInfo.GetCompilationTime(true);
         long jitMethods = JitInfo.GetCompiledMethodCount(true);
         if (lastFrame != 0 && count < frames.Length)
@@ -147,7 +205,7 @@ public sealed class ModEntry : Mod
     {
         if (fixture?.GetValue(null) is not true || !Context.IsWorldReady) throw new InvalidOperationException("Only the in-memory QA fixture is allowed.");
     }
-    private static object Precompile(bool toolChain)
+    private static object Precompile(bool toolChain, bool transitive)
     {
         Guard(); if (measuring) throw new InvalidOperationException("Cannot precompile during measurement.");
         var results = new List<object>();
@@ -164,16 +222,32 @@ public sealed class ModEntry : Mod
             (typeof(MeleeWeapon), "DoFunction"), (typeof(MeleeWeapon), "doSwipe"),
             (typeof(Game1), "createRadialDebris"), (typeof(Game1), "createMultipleObjectDebris"),
             (typeof(Game1), "createObjectDebris"), (typeof(Tree), "shake") });
+        var queue = new Queue<(MethodBase Method, int Depth)>();
+        var seen = new HashSet<MethodBase>();
         foreach (var target in targets)
         {
             foreach (var method in target.Item1.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly).Where(m => m.Name == target.Item2 && !m.IsAbstract && !m.ContainsGenericParameters))
-            {
-                long at = Stopwatch.GetTimestamp();
-                RuntimeHelpers.PrepareMethod(method.MethodHandle);
-                results.Add(new { method = target.Item1.Name + "." + method.Name, ms = Ms(Stopwatch.GetTimestamp() - at) });
-            }
+                queue.Enqueue((method, 0));
         }
-        return new { ms = Ms(Stopwatch.GetTimestamp() - before), toolChain, methods = results };
+        while (queue.Count > 0 && seen.Count < 1200)
+        {
+            var (method, depth) = queue.Dequeue();
+            if (method.IsAbstract || method.ContainsGenericParameters || !seen.Add(method)) continue;
+            long at = Stopwatch.GetTimestamp();
+            string error = null;
+            try { RuntimeHelpers.PrepareMethod(method.MethodHandle); }
+            catch (Exception ex) { error = ex.GetType().Name; }
+            results.Add(new { method = method.DeclaringType.FullName + "." + method.Name, depth, error, ms = Ms(Stopwatch.GetTimestamp() - at) });
+            if (!transitive || depth >= 3 || method.GetMethodBody() == null) continue;
+            try
+            {
+                foreach (var instruction in PatchProcessor.GetOriginalInstructions(method))
+                    if (instruction.operand is MethodBase child && (child.DeclaringType.Assembly == typeof(Game1).Assembly
+                        || child.DeclaringType.Assembly == typeof(Game).Assembly)) queue.Enqueue((child, depth + 1));
+            }
+            catch (Exception) { /* QA reports prepared methods; unsupported IL is not executed. */ }
+        }
+        return new { ms = Ms(Stopwatch.GetTimestamp() - before), toolChain, transitive, methods = results };
     }
     private static void Prepare(string value)
     {
@@ -195,7 +269,12 @@ public sealed class ModEntry : Mod
             if (value == "axe" || value == "mixed" && x % 4 == 0 && y % 4 == 0) farm.terrainFeatures[tile] = new Tree("1", 5);
             else if (value == "pickaxe" || value == "mixed" && (x + y) % 9 == 0)
             {
-                var stone = new StardewValley.Object(tile, "343", false); stone.MinutesUntilReady = 2; farm.objects[tile] = stone;
+                // The (Vector2, string) constructor creates a BIG craftable.
+                // Use the item registry so this is a real, breakable stone.
+                var stone = (StardewValley.Object)ItemRegistry.Create("(O)343");
+                if (stone.bigCraftable.Value || !stone.IsBreakableStone() || ItemRegistry.GetDataOrErrorItem(stone.QualifiedItemId).IsErrorItem)
+                    throw new InvalidOperationException("Invalid stone performance fixture.");
+                stone.TileLocation = tile; stone.MinutesUntilReady = 2; farm.objects[tile] = stone;
             }
             else farm.terrainFeatures[tile] = new Grass(1, 4);
         }
@@ -286,11 +365,22 @@ public sealed class ModEntry : Mod
             var data = doc.RootElement; id = data.GetProperty("id").GetString(); Guard(); object result;
             switch (data.GetProperty("action").GetString())
             {
-                case "precompile": result = Precompile(data.TryGetProperty("toolChain", out var toolChain) && toolChain.GetBoolean()); break;
+                case "shader_check": Guard(); if (measuring) throw new InvalidOperationException("Stop measurement first"); result = ShaderCheck.Run(); break;
+                case "tree_band":
+                    Guard(); if (measuring) throw new InvalidOperationException("Stop measurement first");
+                    int band = data.GetProperty("height").GetInt32();
+                    if (band != 8 && band != 16 && band != 32) throw new InvalidOperationException("Unsupported tree band");
+                    var trim = AppDomain.CurrentDomain.GetAssemblies().Single(a => a.GetName().Name == "VerticalWorld").GetType("Rgdsplus.VerticalWorld.TreeSpriteTrim");
+                    trim.GetField("StripHeight", BindingFlags.Static | BindingFlags.NonPublic).SetValue(null, band);
+                    trim.GetMethod("Clear", BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, null);
+                    result = new { height = band }; break;
+                case "precompile": result = Precompile(data.TryGetProperty("toolChain", out var toolChain) && toolChain.GetBoolean(), data.TryGetProperty("transitive", out var transitive) && transitive.GetBoolean()); break;
+                case "render_detail": installRenderDetail(); result = new { renderDetailInstalled }; break;
+                case "object_detail": installObjectDetail(); result = new { objectDetailInstalled }; break;
                 case "prepare": Prepare(data.GetProperty("scene").GetString()); result = new { scene, terrain = Game1.getFarm().terrainFeatures.Count(), objects = Game1.getFarm().objects.Count() }; break;
                 case "start":
                     label = data.GetProperty("label").GetString(); Array.Clear(elapsed); Array.Clear(allocated); Array.Clear(calls);
-                    count = active = actions = maxDebris = maxSprites = 0; lastFrame = releaseAt = 0;
+                    count = active = actions = maxDebris = maxSprites = 0; lastFrame = releaseAt = 0; drewThisTick = false;
                     pendingWarpTarget = null;
                     actionEvents.Clear();
                     Array.Clear(firstElapsed); Array.Clear(maxElapsed); Array.Clear(firstAllocated);
@@ -298,6 +388,8 @@ public sealed class ModEntry : Mod
                     initialObjects = Game1.getFarm().terrainFeatures.Count() + Game1.getFarm().objects.Count();
                     for (int i = 0; i < 3; i++) collections[i] = GC.CollectionCount(i);
                     globalAllocated = GC.GetTotalAllocatedBytes(false); runActions = data.GetProperty("actions").GetBoolean();
+                    if (presentationFeedback) rgds_presentation_start();
+                    jitTrace?.Start();
                     frameTotalAllocated = globalAllocated;
                     for (int i = 0; i < 3; i++) frameCollections[i] = collections[i];
                     actionAt = Environment.TickCount64 + 1000; start = Stopwatch.GetTimestamp(); measuring = true; result = new { started = label }; break;
@@ -315,12 +407,14 @@ public sealed class ModEntry : Mod
     }
     private static object Stop()
     {
+        jitTrace?.Stop(Path.Combine(directory, label + "-jit.json"));
         measuring = runActions = false; double seconds = Ms(Stopwatch.GetTimestamp() - start) / 1000;
         long bytes = GC.GetTotalAllocatedBytes(false) - globalAllocated;
         int removed = initialObjects - Game1.getFarm().terrainFeatures.Count() - Game1.getFarm().objects.Count();
         var gc = Enumerable.Range(0, 3).Select(i => GC.CollectionCount(i) - collections[i]).ToArray();
         var boundaries = Enumerable.Range(0, names.Count).Select(i => new { name = names[i], calls = calls[i], totalMs = Ms(elapsed[i]), msPerFrame = Ms(elapsed[i]) / Math.Max(1, count), firstMs = Ms(firstElapsed[i]), maxMs = Ms(maxElapsed[i]), allocatedBytes = allocated[i], firstAllocatedBytes = firstAllocated[i] }).ToArray();
-        var result = new { label, scene, tickOnly, seconds, frames = count, activeFrames = active, fps = count / seconds, frameMs = Distribution(frames.Take(count).ToArray()), actionFrameMs = Distribution(Enumerable.Range(0, count).Where(i => actionFrames[i]).Select(i => frames[i]).ToArray()), gc, allocatedBytes = bytes, allocatedMiBPerSecond = bytes / 1048576.0 / seconds, managedMiB = GC.GetTotalMemory(false) / 1048576.0, actions, removed, maxDebris, maxSprites, boundaries, actionEvents, zoom = Game1.options.zoomLevel, uiScale = Game1.options.uiScale, menu = Game1.activeClickableMenu?.GetType().Name };
+        int presented = presentationFeedback ? rgds_presentation_stop(Path.Combine(directory, label + "-presentation.csv")) : 0;
+        var result = new { label, scene, tickOnly, presentationFeedback, presented, seconds, frames = count, activeFrames = active, fps = count / seconds, frameMs = Distribution(frames.Take(count).ToArray()), actionFrameMs = Distribution(Enumerable.Range(0, count).Where(i => actionFrames[i]).Select(i => frames[i]).ToArray()), gc, allocatedBytes = bytes, allocatedMiBPerSecond = bytes / 1048576.0 / seconds, managedMiB = GC.GetTotalMemory(false) / 1048576.0, actions, removed, maxDebris, maxSprites, boundaries, actionEvents, zoom = Game1.options.zoomLevel, uiScale = Game1.options.uiScale, menu = Game1.activeClickableMenu?.GetType().Name };
         File.WriteAllText(Path.Combine(directory, label + ".json"), JsonSerializer.Serialize(result));
         using var writer = new StreamWriter(Path.Combine(directory, label + "-frames.csv"));
         writer.WriteLine("index,frame_ms,action,allocated_bytes,gc0,gc1,gc2,game_update_ms,game_draw_ms,world_ms,melee_ms,grass_ms,axe_ms,pickaxe_ms,elapsed_ms,action_number,jit_ms,jit_methods");

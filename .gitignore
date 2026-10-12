@@ -19,6 +19,7 @@
 *.nupkg
 
 # User-owned game data and runtime state. These must never enter the repository.
+/mod/
 /port/stardewvalleymainline/gamedata/
 /port/stardewvalleymainline/savedata/*
 !/port/stardewvalleymainline/savedata/.gitkeep

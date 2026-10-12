@@ -9,7 +9,7 @@ namespace Rgdsplus.VerticalWorld
         public bool NativeFrames { get; set; } = true;
         public float UiScale { get; set; } = 1.5f;
         public int LayoutVersion { get; set; }
-        public bool[] VisiblePages { get; set; } = new bool[12];
+        public bool[] VisiblePages { get; set; } = new bool[Dashboard.PageCount];
         private static IModHelper helper;
         internal static CompanionPreferences Current = new CompanionPreferences();
         public CompanionPreferences() => Array.Fill(VisiblePages, true);
@@ -25,8 +25,13 @@ namespace Rgdsplus.VerticalWorld
                 Current.LayoutVersion = 2;
                 Save();
             }
-            if (Current.VisiblePages == null || Current.VisiblePages.Length != 12)
+            if (Current.VisiblePages == null || Current.VisiblePages.Length != Dashboard.PageCount)
+            {
+                var previous = Current.VisiblePages;
                 Current.VisiblePages = new CompanionPreferences().VisiblePages;
+                if (previous != null) Array.Copy(previous, Current.VisiblePages, Math.Min(previous.Length, Current.VisiblePages.Length));
+            }
+            Current.VisiblePages[12] = Current.VisiblePages[13] = true;
             Current.VisiblePages[0] = Current.VisiblePages[11] = true;
             Current.UiScale = ValidUiScale(Current.UiScale);
             helper.Events.GameLoop.GameLaunched += (_, __) => ApplyUiScale();

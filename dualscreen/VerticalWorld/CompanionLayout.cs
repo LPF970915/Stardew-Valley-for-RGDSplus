@@ -6,7 +6,7 @@ namespace Rgdsplus.VerticalWorld
     // Physical 1024 x 768 reference canvas, designed at 150% UI scale.
     internal static class CompanionLayout
     {
-        internal const int Width = 1024, Height = 768, Pages = 12;
+        internal const int Width = 1024, Height = 768, Pages = Dashboard.PageCount;
         internal static Rectangle Content => new Rectangle(16, 90, 992, 630);
         internal static Rectangle PreviousPage => new Rectangle(16, 16, 56, 60);
         internal static Rectangle NextPage => new Rectangle(952, 16, 56, 60);

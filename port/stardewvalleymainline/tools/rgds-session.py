@@ -147,7 +147,9 @@ def run(session, owner, game_dir):
             if target is None:
                 target = game_identity(session, game_dir)
             elif not alive(target):
-                break
+                # The launcher can return to title in a fresh child. Keep the
+                # menu and exit-key guard owned by the launcher until it exits.
+                target = game_identity(session, game_dir)
             if now >= next_scan:
                 next_scan = now + .5
                 pause_menus(paused)

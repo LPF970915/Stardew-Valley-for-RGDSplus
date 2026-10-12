@@ -28,7 +28,7 @@ namespace Rgdsplus.VerticalWorld
         private static readonly Color Muted = Dashboard.Muted;
         private static readonly Color Fill = new Color(255, 217, 142);
         private static readonly Dictionary<string, List<Row>> lists = new Dictionary<string, List<Row>>();
-        private static readonly int[] offsets = new int[12];
+        private static readonly int[] offsets = new int[Dashboard.PageCount];
         
         private static int calendarDay;
         private static Quest cancelPending;
@@ -60,7 +60,7 @@ namespace Rgdsplus.VerticalWorld
         internal static int BackpackTextOffset;
         private static int recipeCategory, recipeGroup, categoryStart, detailOffset, detailMax, giftOffset, bundleOffset, mapPeople;
         private static bool showCompleted = true;
-        private static readonly int[] selections = new int[12];
+        private static readonly int[] selections = new int[Dashboard.PageCount];
         private static Point pointer = new Point(100, 200);
         internal static void Reset()
         {
@@ -82,7 +82,8 @@ namespace Rgdsplus.VerticalWorld
             if(page==0) { if(pointer.X>=288&&pointer.Y>=635) BackpackTextOffset=Math.Clamp(BackpackTextOffset+step,0,100); return; }
             if(page==3) { mapPeople=Math.Clamp(mapPeople+step,0,Math.Max(0,People().Count-8)); return; }
             if(page==2) { offsets[2]=Math.Clamp(offsets[2]+step,0,Math.Max(0,Game1.getFarm().getShippingBin(Game1.player).Count-4));Dashboard.ScrollRow=offsets[2];return; }
-            if(page==10) return;
+            if(page==12) { ModManagement.Scroll(step); return; }
+            if(page==10 || page==13) return;
             if(page==11) { settingsOffset=Math.Clamp(settingsOffset+step,0,12); return; }
             if(page==1&&pointer.X>=340&&pointer.Y>=332)
             { ingredientOffset=Math.Clamp(ingredientOffset+step,0,Math.Max(0,(Selected(Rows(1),1)?.Recipe?.recipeList.Count??0)-4)); return; }

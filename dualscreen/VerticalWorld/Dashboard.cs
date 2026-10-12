@@ -13,10 +13,10 @@ namespace Rgdsplus.VerticalWorld
     {
         // Reference v2 palette; textures below are read from the user's PC game atlas.
         internal static readonly Color Ink = new Color(50,27,15), Muted = new Color(112,69,31), Card = new Color(255,217,142), Selected = new Color(255,180,65);
-        private static readonly int[] PageIconTiles = { 0,4,1,3,5,2,2,3,4,5,2,6 };
-        private static readonly string[] ChinesePages = { "背包", "制作", "进度", "地图", "任务", "关系", "送礼指南", "田地", "机器", "社区中心", "日历", "设置" };
-        private static readonly string[] EnglishPages = { "Backpack", "Crafting", "Progress", "Map", "Journal", "Relationships", "Gift Guide", "Fields", "Machines", "Bundles", "Calendar", "Settings" };
-        internal const int PageCount = 12;
+        private static readonly int[] PageIconTiles = { 0,4,1,3,5,2,2,3,4,5,2,6,6,7 };
+        private static readonly string[] ChinesePages = { "背包", "制作", "进度", "地图", "任务", "关系", "送礼指南", "田地", "机器", "社区中心", "日历", "设置", "MOD", "退出" };
+        private static readonly string[] EnglishPages = { "Backpack", "Crafting", "Progress", "Map", "Journal", "Relationships", "Gift Guide", "Fields", "Machines", "Bundles", "Calendar", "Settings", "MOD", "Exit" };
+        internal const int PageCount = 14;
         internal static string Notice = "";
         internal static int ScrollRow;
         private static int railStart;

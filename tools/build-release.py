@@ -8,7 +8,7 @@ import subprocess
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-BUILD = "20261009-02"
+BUILD = "20261012-04"
 APP = "Ports/Stardew Valley for RGDSplus/"
 ENTRY = "Ports/Stardew Valley for RGDSplus.sh"
 MANIFEST = APP + "RELEASE.json"
@@ -88,6 +88,11 @@ def collect(root=ROOT):
     for name in ("cover.png", "screenshot.png", "gameinfo.xml", "port.json", "stardewvalleymainline.md"):
         add(APP + name, port / name)
     add(APP + "StardewValleyMainline.sh", root / "port/StardewValleyMainline.sh")
+    # Explicit required input also covers a new helper before its first commit.
+    if APP + "tools/rgds-audio.py" not in files:
+        add(APP + "tools/rgds-audio.py", port / "tools/rgds-audio.py")
+    if APP + "tools/rgds-mod-state.py" not in files:
+        add(APP + "tools/rgds-mod-state.py", port / "tools/rgds-mod-state.py")
     mod = root / "dualscreen/VerticalWorld"
     add(APP + "Mods/RGDSplus.VerticalWorld/VerticalWorld.dll", mod / "bin/Release/net6.0/VerticalWorld.dll")
     add(APP + "Mods/RGDSplus.VerticalWorld/manifest.json", mod / "manifest.json")
@@ -113,6 +118,15 @@ def collect(root=ROOT):
         "audio": True,
         "runtimeNetworkRequired": False,
         "physicalBuffer": "2048x768",
+        "worldRenderScale": 1,
+        "worldUpscaler": "none",
+        "targetDrawRate": 30,
+        "fixedUpdateRate": 60,
+        "verticalSync": True,
+        "firstUseWarmup": True,
+        "performanceValidation": "first-use-passed-long-run-unresolved-manual-test-requested",
+        "worldAlphaDiscard": True,
+        "treeTransparentMarginTrim": True,
         "upperHalf": "left",
         "lowerHalf": "right",
         "logicalViewport": "1024x768",
@@ -165,7 +179,7 @@ def verify_archive(path):
         required = ("dotnet/dotnet", "dotnet/shared/Microsoft.NETCore.App/6.0.32/libcoreclr.so",
                     "tools/MainlineGameDataPatcher/MainlineGameDataPatcher.dll",
                     "tools/SMAPIBundle/game-root/StardewModdingAPI.dll",
-                    "tools/rgds-session.py", "tools/smapi-common",
+                    "tools/rgds-session.py", "tools/rgds-audio.py", "tools/rgds-mod-state.py", "tools/smapi-common",
                     "libs.aarch64/liblwjgl_lz4.so", "licenses/LICENSE.LZ4.txt")
         for name in required:
             if APP + name not in data:
@@ -182,6 +196,20 @@ def verify_archive(path):
             raise ValueError("Audio/QA policy missing")
         if re.search(rb"export\s+SDV_DUAL_(?:UI|PERF)_TEST_DIR\s*=", entry):
             raise ValueError("Release enables QA")
+        if (release.get("worldRenderScale") != 1 or release.get("worldUpscaler") != "none"
+                or release.get("targetDrawRate") != 30 or release.get("fixedUpdateRate") != 60
+                or release.get("verticalSync") is not True
+                or release.get("worldAlphaDiscard") is not True or release.get("treeTransparentMarginTrim") is not True
+                or b'SDV_WORLD_RENDER_SCALE="${SDV_WORLD_RENDER_SCALE:-1}"' not in entry
+                or b'SDV_TARGET_FPS="${SDV_TARGET_FPS:-30}"' not in entry
+                or b'SDV_WORLD_ALPHA_DISCARD="${SDV_WORLD_ALPHA_DISCARD:-1}"' not in entry
+                or b'SDV_TREE_TRIM="${SDV_TREE_TRIM:-1}"' not in entry):
+            raise ValueError("Native resolution / synchronized 30 FPS defaults missing")
+        if release.get("firstUseWarmup") is True:
+            if b'SDV_FIRST_USE_WARMUP="${SDV_FIRST_USE_WARMUP:-1}"' not in entry:
+                raise ValueError("First-use warmup default missing")
+        elif release["build"] == BUILD:
+            raise ValueError("Current release must declare first-use warmup")
         return {"build": release["build"], "files": len(data),
                 "bytes": Path(path).stat().st_size, "sha256": digest(Path(path).read_bytes()),
                 "gameAssetsIncluded": False, "savesIncluded": False,
@@ -214,7 +242,7 @@ def build(output):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=ROOT / "build/releases/20261009-01/Stardew Valley for RGDSplus.zip")
+    parser.add_argument("--output", type=Path, default=ROOT / "build/releases" / BUILD / "Stardew Valley for RGDSplus.zip")
     parser.add_argument("--verify", type=Path)
     args = parser.parse_args()
     if args.verify:

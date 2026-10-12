@@ -22,9 +22,11 @@ namespace Rgdsplus.VerticalWorld
             VerticalWorldRenderer.Install();
             CompanionPreferences.Initialize(helper);
             CompanionHistory.Initialize(helper);
+            ModManagement.Initialize(helper);
             FrameMetrics.Initialize(helper.DirectoryPath);
             DisplayModeController.Initialize(helper);
             UiTestDriver.Initialize(helper);
+            FirstUseWarmup.Initialize(helper);
             helper.Events.GameLoop.ReturnedToTitle += (_, e) => VerticalWorldRenderer.ReleaseWorld();
             Write("loaded version=0.6.0-reference-v2; upper=" + (VerticalWorldRenderer.UpperOnRight ? "right" : "left") + "; world-passes=" + (VerticalWorldRenderer.TwoPass ? 2 : 1));
         }
@@ -51,6 +53,8 @@ namespace Rgdsplus.VerticalWorld
         private static bool secondPass, worldThisFrame, cachedWorld, lowerCacheValid;
         private static int lowerCacheFrame = -1;
         private static RenderTarget2D world, lower, upperUi;
+        internal static int WorldRasterWidth => world?.Width ?? 0;
+        internal static int WorldRasterHeight => world?.Height ?? 0;
         internal static RenderTarget2D UpperUi => upperUi;
         private static bool upperUiThisFrame;
         private static bool NeedsUpperUi => DisplayModeController.Expanded && (Game1.dialogueUp || Game1.activeClickableMenu is DialogueBox);
@@ -74,6 +78,10 @@ namespace Rgdsplus.VerticalWorld
             try
             {
                 Enabled = true;
+                WorldRenderQuality.Install(harmony);
+                FramePacing.Install(harmony);
+                WorldSpriteEffect.Install(harmony);
+                TreeSpriteTrim.Install(harmony);
                 Patch(harmony, typeof(Game1), "Draw", nameof(DrawPrefix), nameof(DrawPostfix));
                 Patch(harmony, typeof(Game1), "Update", nameof(UpdatePrefix), nameof(UpdatePostfix));
                 Patch(harmony, typeof(Game1), "DrawWorld", nameof(WorldPrefix), nameof(WorldPostfix), nameof(WorldFinalizer));
@@ -169,8 +177,8 @@ namespace Rgdsplus.VerticalWorld
             EnsureTargets(__instance);
             int w = WorldWidth, h = WorldHeight;
             bool expanded = DisplayModeController.Expanded;
-            Resize(ref world, __instance.GraphicsDevice, w, expanded || UseTwoPass ? h : h * 2, "Reference.World");
-            if (UseTwoPass) Resize(ref lower, __instance.GraphicsDevice, w, h, "Reference.Lower");
+            ResizeWorld(ref world, __instance.GraphicsDevice, w, expanded || UseTwoPass ? h : h * 2, "Reference.World");
+            if (UseTwoPass) ResizeWorld(ref lower, __instance.GraphicsDevice, w, h, "Reference.Lower");
             var location = Game1.currentLocation;
             int mapW = location.Map.DisplayWidth, mapH = location.Map.DisplayHeight;
             if (!ReferenceEquals(location, lastLocation)) lowerCacheValid = false;
@@ -257,9 +265,9 @@ namespace Rgdsplus.VerticalWorld
             batch.Begin(SpriteSortMode.Deferred, BlendState.Opaque, SamplerState.PointClamp);
             if (showWorld && world != null && !world.IsDisposed)
             {
-                batch.Draw(world, PhysicalUpper, new Rectangle(0, 0, WorldWidth, WorldHeight), Color.White);
+                batch.Draw(world, PhysicalUpper, WorldRenderQuality.Source(world, new Rectangle(0, 0, WorldWidth, WorldHeight)), Color.White);
                 if (!expanded)
-                    batch.Draw(UseTwoPass ? lower : world, PhysicalLower, new Rectangle(0, UseTwoPass ? 0 : WorldHeight, WorldWidth, WorldHeight), Color.White);
+                    batch.Draw(UseTwoPass ? lower : world, PhysicalLower, WorldRenderQuality.Source(UseTwoPass ? lower : world, new Rectangle(0, UseTwoPass ? 0 : WorldHeight, WorldWidth, WorldHeight)), Color.White);
             }
             else if (__instance.screen != null)
                 batch.Draw(__instance.screen, expanded ? PhysicalUpper : PhysicalLower, Color.White);
@@ -291,6 +299,7 @@ namespace Rgdsplus.VerticalWorld
 
         private static void EnsureTargets(Game1 game)
         {
+            WorldRenderQuality.ConfigurePresentation();
             var screen = game.screen;
             var uiScreen = game.uiScreen;
             Resize(ref screen, game.GraphicsDevice, WorldWidth, WorldHeight, "@Game1.screen");
@@ -300,6 +309,11 @@ namespace Rgdsplus.VerticalWorld
             // The native setters dispose the previous value even for self-assignment.
             if (!ReferenceEquals(game.screen, screen)) game.screen = screen;
             if (!ReferenceEquals(game.uiScreen, uiScreen)) game.uiScreen = uiScreen;
+        }
+        private static void ResizeWorld(ref RenderTarget2D target, GraphicsDevice device, int width, int height, string name)
+        {
+            Resize(ref target, device, WorldRenderQuality.Pixels(width), WorldRenderQuality.Pixels(height), name);
+            WorldRenderQuality.Register(target, width, height);
         }
         private static void Resize(ref RenderTarget2D target, GraphicsDevice device, int width, int height, string name)
         {
@@ -314,6 +328,9 @@ namespace Rgdsplus.VerticalWorld
         {
             world?.Dispose(); lower?.Dispose(); upperUi?.Dispose();
             world = lower = upperUi = null;
+            WorldRenderQuality.Clear();
+            WorldSpriteEffect.Release();
+            TreeSpriteTrim.Clear();
             cachedWorld = worldThisFrame = false;
             lowerCacheValid = false;
             lowerCacheFrame = -1;

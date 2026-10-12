@@ -2,11 +2,33 @@
 param(
     [string]$SteamDir = '',
     [string]$PortDir = '',
+    [switch]$PromptSteamDir,
     [switch]$Clean,
     [switch]$Replace
 )
 $ErrorActionPreference = 'Stop'
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+function Get-Sha256([string]$Path) {
+    $stream = [IO.File]::OpenRead($Path)
+    $algorithm = $null
+    try {
+        $algorithm = [Security.Cryptography.SHA256]::Create()
+        $hash = $algorithm.ComputeHash($stream)
+        return ([BitConverter]::ToString($hash) -replace '-', '').ToLowerInvariant()
+    } finally {
+        if ($null -ne $algorithm) { $algorithm.Dispose() }
+        $stream.Dispose()
+    }
+}
+Write-Host ''
+Write-Host 'Stardew Valley for RGDSplus - Steam asset import' -ForegroundColor Cyan
+Write-Host 'The Steam folder must contain Stardew Valley.dll and Content.'
+if ($PromptSteamDir) {
+    Write-Host ''
+    Write-Host 'In Steam: Stardew Valley -> Manage -> Browse local files.'
+    $SteamDir = Read-Host 'Paste the Steam Stardew Valley folder and press Enter'
+    if ([string]::IsNullOrWhiteSpace($SteamDir)) { throw 'No Steam folder was entered. Nothing was copied.' }
+}
 if ([string]::IsNullOrWhiteSpace($PortDir)) {
     if (Test-Path -LiteralPath (Join-Path $scriptRoot '..\StardewValleyMainline.sh')) {
         $PortDir = Join-Path $scriptRoot '..\gamedata'
@@ -21,11 +43,20 @@ if ([string]::IsNullOrWhiteSpace($SteamDir)) {
         if (Test-Path -LiteralPath (Join-Path $candidate 'Stardew Valley.dll')) { $SteamDir = $candidate }
     }
     if ([string]::IsNullOrWhiteSpace($SteamDir)) {
+        Write-Host ''
+        Write-Host 'Steam was not found automatically.' -ForegroundColor Yellow
+        Write-Host 'In Steam: Stardew Valley -> Manage -> Browse local files.'
         $SteamDir = Read-Host 'Steam: Manage > Browse local files. Enter the Stardew Valley folder'
     }
 }
-$source = (Resolve-Path -LiteralPath $SteamDir).Path
+if ([string]::IsNullOrWhiteSpace($SteamDir)) { throw 'No Steam folder was entered.' }
+$SteamDir = $SteamDir.Trim().Trim('"')
+try { $source = (Resolve-Path -LiteralPath $SteamDir -ErrorAction Stop).Path }
+catch { throw "Steam folder not found: $SteamDir" }
 $destination = [IO.Path]::GetFullPath($PortDir)
+Write-Host "Source:      $source"
+Write-Host "Destination: $destination"
+Write-Host '[1/4] Checking game files and building the import list...'
 $comparison = [StringComparison]::OrdinalIgnoreCase
 $sourcePrefix = $source.TrimEnd('\','/') + [IO.Path]::DirectorySeparatorChar
 $destinationPrefix = $destination.TrimEnd('\','/') + [IO.Path]::DirectorySeparatorChar
@@ -61,25 +92,52 @@ $staging = Join-Path $parent ('gamedata.import-' + [guid]::NewGuid().ToString('N
 $backup = $null
 try {
 New-Item -ItemType Directory -Path $staging | Out-Null
-Get-ChildItem -LiteralPath $source -Force | ForEach-Object {
-    if ($_.PSIsContainer) {
-        if ($_.Name -eq 'Content') { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $staging $_.Name) -Recurse }
-        return
-    }
-    if ($_.Extension -notin @('.dll','.json','.xml')) { return }
+$sourceFiles = @(Get-ChildItem -LiteralPath (Join-Path $source 'Content') -Recurse -File)
+$sourceFiles += @(Get-ChildItem -LiteralPath $source -File -Force | Where-Object {
+    if ($_.Extension -notin @('.dll','.json','.xml')) { return $false }
     $skip = $false
     foreach ($pattern in $nativePatterns) { if ($_.Name -like $pattern) { $skip = $true; break } }
-    if (-not $skip) { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $staging $_.Name) }
+    return -not $skip
+})
+$totalBytes = ($sourceFiles | Measure-Object -Property Length -Sum).Sum
+$copiedBytes = 0L
+$done = 0
+$timer = [Diagnostics.Stopwatch]::StartNew()
+$lastReport = -2.0
+Write-Host ("[2/4] Copying {0} files ({1:N0} MiB). Keep this window open." -f $sourceFiles.Count, ($totalBytes / 1MB))
+foreach ($file in $sourceFiles) {
+    $relative = $file.FullName.Substring($source.Length + 1)
+    $target = Join-Path $staging $relative
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+    if ($file.Length -ge 16MB) { Write-Host ("Copying large file: {0} ({1:N0} MiB)..." -f $relative, ($file.Length / 1MB)) }
+    Copy-Item -LiteralPath $file.FullName -Destination $target
+    $done++
+    $copiedBytes += $file.Length
+    if ($done -eq 1 -or $done -eq $sourceFiles.Count -or ($timer.Elapsed.TotalSeconds - $lastReport) -ge 2) {
+        Write-Host ("Copied {0}/{1} files, {2:N0}/{3:N0} MiB ({4:N0}%)" -f $done, $sourceFiles.Count, ($copiedBytes / 1MB), ($totalBytes / 1MB), (100 * $done / $sourceFiles.Count))
+        $lastReport = $timer.Elapsed.TotalSeconds
+    }
 }
 $files = @(Get-ChildItem -LiteralPath $staging -Recurse -File)
+if ($files.Count -ne $sourceFiles.Count) { throw 'Copied file count does not match the import list.' }
+$done = 0
+$lastReport = -2.0
+$timer.Restart()
+Write-Host '[3/4] Checking SHA256 of every copied file. Reading the card may take several minutes.'
 foreach ($file in $files) {
     $relative = $file.FullName.Substring($staging.Length + 1)
-    if ((Get-FileHash -LiteralPath $file.FullName).Hash -ne (Get-FileHash -LiteralPath (Join-Path $source $relative)).Hash) {
+    if ((Get-Sha256 $file.FullName) -ne (Get-Sha256 (Join-Path $source $relative))) {
         throw "Copy hash mismatch: $relative"
+    }
+    $done++
+    if ($done -eq 1 -or $done -eq $files.Count -or ($timer.Elapsed.TotalSeconds - $lastReport) -ge 2) {
+        Write-Host ("Verified {0}/{1} files ({2:N0}%)" -f $done, $files.Count, (100 * $done / $files.Count))
+        $lastReport = $timer.Elapsed.TotalSeconds
     }
 }
 $copiedCount = @(Get-ChildItem -LiteralPath (Join-Path $staging 'Content') -Recurse -File).Count
 if ($copiedCount -ne $contentCount) { throw 'Content file count changed during import.' }
+Write-Host '[4/4] All hashes passed. Installing the verified game data...'
 if (Test-Path -LiteralPath $destination) {
     $backup = Join-Path $parent ('gamedata.backup-' + [guid]::NewGuid().ToString('N'))
     Move-Item -LiteralPath $destination -Destination $backup

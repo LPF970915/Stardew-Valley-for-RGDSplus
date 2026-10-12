@@ -59,6 +59,8 @@ namespace Rgdsplus.VerticalWorld
                 case 9: DrawBundles(b); break;
                 case 10: DrawCalendar(b); break;
                 case 11: DrawSettings(b); break;
+                case 12: ModManagement.Draw(b); break;
+                case 13: DrawExit(b); break;
             }
         }
         private static void List(SpriteBatch b,List<Row> rows,int page,int width=300)
@@ -491,6 +493,8 @@ namespace Rgdsplus.VerticalWorld
         internal static bool Click(int page,int x,int y)
         {
             if(page==0)return Dashboard.ClickBackpack(x,y);
+            if(page==12)return ModManagement.Click(x,y);
+            if(page==13)return ClickExit(x,y);
             Pointer(x,y);
             if(page==10)
             {
