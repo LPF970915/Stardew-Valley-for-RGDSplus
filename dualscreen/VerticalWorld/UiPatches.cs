@@ -92,6 +92,8 @@ namespace Rgdsplus.VerticalWorld
             __result = ScreenGeometry.ValidScale(__instance.baseUIScale) * (1024f / 1366f);
             if (CharacterCreationLayout.Active || TitleMenuLayout.UsesLargeScale) __result = TitleMenuLayout.Scale;
             if (DisplayModeController.Expanded) __result = Math.Min(__result, DisplayModeController.MenuScaleLimit);
+            if (DisplayModeController.Expanded && Game1.activeClickableMenu is ShopMenu)
+                __result = ShopMenuLayout.FitScale(__result, 1024, 768, IClickableMenu.borderWidth);
             return false;
         }
         internal static void EnsureViewports()

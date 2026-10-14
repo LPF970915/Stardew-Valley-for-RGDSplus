@@ -22,7 +22,8 @@ def main():
     ssh = paramiko.SSHClient()
     ssh.load_system_host_keys()
     ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
-    ssh.connect("[device-host]", username="root", password=os.environ["RGDSPLUS_SSH_PASSWORD"], timeout=10)
+    ssh.connect(os.environ.get("RGDSPLUS_SSH_HOST", "rgdsplus.local"), username="root",
+                password=os.environ["RGDSPLUS_SSH_PASSWORD"], timeout=10)
     checks = []
     with ssh.open_sftp() as ftp:
         def request(action, **kwargs):

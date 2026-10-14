@@ -32,7 +32,7 @@ def upload(ssh, ftp, local, remote):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", default="[device-host]")
+    parser.add_argument("--host", default=os.environ.get("RGDSPLUS_SSH_HOST", "rgdsplus.local"))
     parser.add_argument("--game", default=GAME)
     args = parser.parse_args()
     game = args.game

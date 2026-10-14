@@ -30,7 +30,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archive", type=Path)
     parser.add_argument("--assets", type=Path, required=True)
-    parser.add_argument("--host", default="[device-host]")
+    parser.add_argument("--host", default=os.environ.get("RGDSPLUS_SSH_HOST", "rgdsplus.local"))
     parser.add_argument("--reuse-test-directory",
                         help="Reuse only a previous isolated QA directory; reapply its raw input archive.")
     parser.add_argument("--device-content", default="/mnt/sdcard/Ports/StardewVerticalWorldD2/StardewVerticalWorldD2/StardewValleyMainline/gamedata/Content",

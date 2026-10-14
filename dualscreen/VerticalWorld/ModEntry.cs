@@ -20,15 +20,17 @@ namespace Rgdsplus.VerticalWorld
             if (File.Exists(LogPath) && new FileInfo(LogPath).Length > 2 * 1024 * 1024)
                 File.WriteAllText(LogPath, "");
             VerticalWorldRenderer.Install();
+            LoadingOverlay.Initialize(helper);
             CompanionPreferences.Initialize(helper);
             CompanionHistory.Initialize(helper);
             ModManagement.Initialize(helper);
+            PortraitCompatibility.Initialize(helper);
             FrameMetrics.Initialize(helper.DirectoryPath);
             DisplayModeController.Initialize(helper);
             UiTestDriver.Initialize(helper);
             FirstUseWarmup.Initialize(helper);
             helper.Events.GameLoop.ReturnedToTitle += (_, e) => VerticalWorldRenderer.ReleaseWorld();
-            Write("loaded version=0.6.0-reference-v2; upper=" + (VerticalWorldRenderer.UpperOnRight ? "right" : "left") + "; world-passes=" + (VerticalWorldRenderer.TwoPass ? 2 : 1));
+            Write("loaded version=0.6.2-reference-v2; upper=" + (VerticalWorldRenderer.UpperOnRight ? "right" : "left") + "; world-passes=" + (VerticalWorldRenderer.TwoPass ? 2 : 1));
         }
         internal static void Write(string line)
         {
@@ -143,6 +145,7 @@ namespace Rgdsplus.VerticalWorld
             if (!Enabled) return;
             var pp = __instance.GraphicsDevice.PresentationParameters;
             __instance.GraphicsDevice.Viewport = new Viewport(0, 0, pp.BackBufferWidth, pp.BackBufferHeight);
+            LoadingOverlay.DrawBootstrap(__instance.GraphicsDevice);
         }
         private static bool BufferPrefix(Game1 __instance, ref bool __result)
         {

@@ -8,7 +8,7 @@ import subprocess
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-BUILD = "20261012-04"
+BUILD = "20261015-01"
 APP = "Ports/Stardew Valley for RGDSplus/"
 ENTRY = "Ports/Stardew Valley for RGDSplus.sh"
 MANIFEST = APP + "RELEASE.json"
@@ -93,6 +93,12 @@ def collect(root=ROOT):
         add(APP + "tools/rgds-audio.py", port / "tools/rgds-audio.py")
     if APP + "tools/rgds-mod-state.py" not in files:
         add(APP + "tools/rgds-mod-state.py", port / "tools/rgds-mod-state.py")
+    if APP + "tools/rgds-mod-compat.py" not in files:
+        add(APP + "tools/rgds-mod-compat.py", port / "tools/rgds-mod-compat.py")
+    resizer = root / "tools/ModCompatResizer/bin/Release/net6.0"
+    for name in ("RGDSplus.ModCompatResizer.dll", "RGDSplus.ModCompatResizer.deps.json",
+                 "RGDSplus.ModCompatResizer.runtimeconfig.json"):
+        add(APP + "tools/ModCompatResizer/" + name, resizer / name)
     mod = root / "dualscreen/VerticalWorld"
     add(APP + "Mods/RGDSplus.VerticalWorld/VerticalWorld.dll", mod / "bin/Release/net6.0/VerticalWorld.dll")
     add(APP + "Mods/RGDSplus.VerticalWorld/manifest.json", mod / "manifest.json")
@@ -117,6 +123,26 @@ def collect(root=ROOT):
         "testsEnabled": False,
         "audio": True,
         "runtimeNetworkRequired": False,
+        "modCompatibility": {
+            "sourceModsUnchanged": True,
+            "steamAssetsUnchanged": True,
+            "runtimeDirectory": ".rgds-runtime/Mods",
+            "targetUniqueIds": ["OO.Portraits", "OO.Portraits2",
+                                 "Mud.SkimpyPortraits", "Mud.SkimpyPortraits2"],
+            "pngThreshold": 512,
+            "scale": 0.125,
+            "rulesVersion": 9,
+            "fromAreaCoordinatesScaled": True,
+            "detailedExpressionLoadedOnDemand": True,
+            "spriteSheetsUnchanged": True,
+            "adaptiveDdfLayout": True,
+            "detailedExpressionLoadedOnDemand": True,
+            "spriteSheetsUnchanged": True,
+            "adaptiveDdfLayout": True,
+            "ambiguousFromAreaSourceImagesPreserved": True,
+            "portraitAntialias": "box-prefilter-point-clamp",
+            "loadingOverlay": "launcher-game-runner-and-smapi-load-stage",
+        },
         "physicalBuffer": "2048x768",
         "worldRenderScale": 1,
         "worldUpscaler": "none",
@@ -171,6 +197,21 @@ def verify_archive(path):
                 or release["testsEnabled"] or not release["audio"]
                 or release["runtimeNetworkRequired"] or release["entrypoint"] != ENTRY):
             raise ValueError("Invalid release defaults")
+        compatibility = release.get("modCompatibility")
+        if (compatibility is None or compatibility.get("sourceModsUnchanged") is not True
+                or compatibility.get("steamAssetsUnchanged") is not True
+                or compatibility.get("runtimeDirectory") != ".rgds-runtime/Mods"
+                or compatibility.get("targetUniqueIds") != ["OO.Portraits", "OO.Portraits2",
+                                                             "Mud.SkimpyPortraits", "Mud.SkimpyPortraits2"]
+                or compatibility.get("pngThreshold") != 512
+                or compatibility.get("scale") != 0.125
+                or compatibility.get("rulesVersion") != 9
+                or compatibility.get("fromAreaCoordinatesScaled") is not True
+                or compatibility.get("ambiguousFromAreaSourceImagesPreserved") is not True):
+            raise ValueError("Invalid MOD compatibility policy")
+        if (compatibility.get("portraitAntialias") != "box-prefilter-point-clamp"
+                or compatibility.get("loadingOverlay") != "launcher-game-runner-and-smapi-load-stage"):
+            raise ValueError("Portrait anti-alias policy missing")
         if set(release["files"]) != set(data) - {MANIFEST, CHECKSUMS}:
             raise ValueError("Invalid manifest membership")
         for name, expected in release["files"].items():
@@ -179,7 +220,9 @@ def verify_archive(path):
         required = ("dotnet/dotnet", "dotnet/shared/Microsoft.NETCore.App/6.0.32/libcoreclr.so",
                     "tools/MainlineGameDataPatcher/MainlineGameDataPatcher.dll",
                     "tools/SMAPIBundle/game-root/StardewModdingAPI.dll",
-                    "tools/rgds-session.py", "tools/rgds-audio.py", "tools/rgds-mod-state.py", "tools/smapi-common",
+                    "tools/rgds-session.py", "tools/rgds-audio.py", "tools/rgds-mod-state.py",
+                    "tools/rgds-mod-compat.py", "tools/smapi-common",
+                    "tools/ModCompatResizer/RGDSplus.ModCompatResizer.dll",
                     "libs.aarch64/liblwjgl_lz4.so", "licenses/LICENSE.LZ4.txt")
         for name in required:
             if APP + name not in data:

@@ -7,7 +7,7 @@
 ## 1. 最终入口与设备
 
 - 掌机菜单入口：`Ports -> Stardew Valley Vertical World D2 Card2`
-- 设备地址：`[device-host]`
+- QA 设备地址通过 `RGDSPLUS_SSH_HOST` 配置；不要把设备地址或凭据写入源码和公开日志。
 - 设备实际游戏目录：`/mnt/sdcard/Ports/StardewVerticalWorldD2/StardewVerticalWorldD2/StardewValleyMainline`
 - 入口脚本：`/mnt/sdcard/Ports/Stardew Valley Vertical World D2 Card2.sh`
 - 设备平台：RGDSplus，两个实体屏均为 `1024x768`
@@ -109,6 +109,7 @@ QA 环境使用内存 fixture 农场：
 
 ```powershell
 $env:RGDSPLUS_SSH_PASSWORD = "<设备密码>"
+$env:RGDSPLUS_SSH_HOST = "<设备主机名或地址>"
 python tools/qa-device-ui.py launch   # 仅启动 QA 内存环境
 python tools/qa-reference-v2.py suite
 python tools/qa-device-ui.py normal  # 无 QA 环境的正常启动检查
@@ -122,6 +123,7 @@ QA 截图不能替代实体屏幕验证。完整可见轮播使用真实 Card2 �
 
 ```powershell
 $env:RGDSPLUS_SSH_PASSWORD = "<设备密码>"
+$env:RGDSPLUS_SSH_HOST = "<设备主机名或地址>"
 python tools/qa-visible-showcase.py --hold 1
 ```
 

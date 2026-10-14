@@ -342,7 +342,7 @@ def main():
     global OUT
     parser = argparse.ArgumentParser()
     parser.add_argument("action", choices=("deploy", "launch", "normal", "suite", "extras", "readability", "status"))
-    parser.add_argument("--host", default="[device-host]")
+    parser.add_argument("--host", default=os.environ.get("RGDSPLUS_SSH_HOST", "rgdsplus.local"))
     parser.add_argument("--out", type=Path)
     args = parser.parse_args()
     if args.out:

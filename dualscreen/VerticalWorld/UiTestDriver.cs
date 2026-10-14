@@ -106,8 +106,16 @@ namespace Rgdsplus.VerticalWorld
                         var kind = data.GetProperty("kind").GetString();
                         DialogueBox probe;
                         if (kind == "portrait")
-                            probe = new DialogueBox(new Dialogue(Game1.getCharacterFromName("Robin"), "RGDS.QA.Dialogue",
-                                string.Join(" ", Enumerable.Repeat(text, 5))));
+                        {
+                            string npcName = data.TryGetProperty("npc", out var npc) ? npc.GetString() : "Robin";
+                            var speaker = Game1.getCharacterFromName(npcName);
+                            if (speaker == null && Game1.characterData.ContainsKey(npcName))
+                                speaker = new NPC(new AnimatedSprite("Characters/" + npcName, 0, 16, 32), Vector2.Zero,
+                                    "Town", 2, npcName, false, Game1.content.Load<Texture2D>("Portraits/" + npcName));
+                            if (speaker == null) throw new InvalidOperationException("NPC is not installed: " + npcName);
+                            probe = new DialogueBox(new Dialogue(speaker, "RGDS.QA.Dialogue",
+                                string.Join(" ", Enumerable.Repeat(text, 5)) + (data.TryGetProperty("happy", out var happy) && happy.GetBoolean() ? "$h" : "")));
+                        }
                         else if (kind == "question")
                             probe = new DialogueBox(text, new[] { new Response("yes", "Yes"), new Response("no", "No") });
                         else if (kind == "list")
@@ -123,6 +131,22 @@ namespace Rgdsplus.VerticalWorld
                         Game1.activeClickableMenu = null;
                         Game1.dialogueUp = false;
                         break;
+                    case "shop_probe":
+                        if (!fixtureActive) throw new InvalidOperationException("In-memory fixture required.");
+                        Game1.activeClickableMenu = new ShopMenu("RGDS.QA.Shop",
+                            new System.Collections.Generic.List<ISalable> {
+                                ItemRegistry.Create("(O)388", 20), ItemRegistry.Create("(O)390", 15),
+                                ItemRegistry.Create("(O)334", 8), ItemRegistry.Create("(O)335", 6),
+                                ItemRegistry.Create("(O)336", 4)
+                            }, playOpenSound: false);
+                        break;
+                    case "dialogue_next":
+                        if (!fixtureActive || Game1.activeClickableMenu is not DialogueBox nextDialogue)
+                            throw new InvalidOperationException("Fixture dialogue required.");
+                        nextDialogue.characterIndexInDialogue = nextDialogue.getCurrentString().Length;
+                        nextDialogue.receiveLeftClick(nextDialogue.x + 20, nextDialogue.y + 20, false);
+                        nextDialogue.characterIndexInDialogue = nextDialogue.getCurrentString().Length;
+                        break;
                     case "fixture_quit":
                         if (!fixtureActive && Context.IsWorldReady) throw new InvalidOperationException("In-memory fixture or title required.");
                         Game1.game1.Exit();
@@ -133,6 +157,12 @@ namespace Rgdsplus.VerticalWorld
                         Game1.textEntry.receiveGamePadButton(Microsoft.Xna.Framework.Input.Buttons.B);
                         break;
                     case "present": PresentOnBothPanels(); break;
+                    case "loading_probe":
+                        LoadingOverlay.BeginTest(data.TryGetProperty("save", out var saveLoading) && saveLoading.GetBoolean());
+                        break;
+                    case "loading_hide":
+                        LoadingOverlay.EndTest();
+                        break;
                     case "title_list_fixture":
                         if (Context.IsWorldReady || Game1.activeClickableMenu is not TitleMenu
                             || TitleMenu.subMenu is not LoadGameMenu list || list.IsDoingTask())
@@ -439,6 +469,9 @@ namespace Rgdsplus.VerticalWorld
                 uiScale = Game1.options?.baseUIScale, zoom = Game1.options?.baseZoomLevel,
                 preferredUiScale = CompanionPreferences.Current.UiScale,
                 effectiveUiScale = Game1.options?.uiScale,
+                managedBytes = GC.GetTotalMemory(false),
+                heapBytes = GC.GetGCMemoryInfo().HeapSizeBytes,
+                heapLimit = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes,
                 characterLayoutInstalled = CharacterCreationLayout.Installed,
                 titleMenuLayoutInstalled = TitleMenuLayout.Installed,
                 letter = menu is LetterViewerMenu mail ? new {
@@ -448,11 +481,21 @@ namespace Rgdsplus.VerticalWorld
                     mail.questID, mail.destroy
                 } : null,
                 modManagement = DisplayModeController.Expanded && DisplayModeController.SelectedPage == 12 ? ModManagement.Status() : null,
+                loadingOverlay = LoadingOverlay.Status(),
                 dialogue = menu is DialogueBox dialogue ? new
                 {
                     dialogue.x, dialogue.y, dialogue.width, dialogue.height, dialogue.heightForQuestions,
                     portrait = dialogue.isPortraitBox(), dialogue.isQuestion,
-                    text = dialogue.getCurrentString(), pages = dialogue.characterDialoguesBrokenUp.Count
+                    text = dialogue.getCurrentString(), pages = dialogue.characterDialoguesBrokenUp.Count,
+                    compatibility = PortraitCompatibility.Status(dialogue)
+                } : null,
+                shop = menu is ShopMenu shop ? new
+                {
+                    bounds = new { x = shop.xPositionOnScreen, y = shop.yPositionOnScreen, shop.width, shop.height },
+                    inventory = new { x = shop.inventory.xPositionOnScreen, y = shop.inventory.yPositionOnScreen,
+                        shop.inventory.width, shop.inventory.height },
+                    close = ComponentInfo(shop.upperRightCloseButton), up = ComponentInfo(shop.upArrow),
+                    down = ComponentInfo(shop.downArrow), rows = shop.forSaleButtons.Select(ComponentInfo).ToArray()
                 } : null,
                 verticalWorldEnabled = VerticalWorldRenderer.Enabled,
                 worldRenderScale = WorldRenderQuality.Scale,

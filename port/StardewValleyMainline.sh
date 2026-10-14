@@ -134,10 +134,18 @@ fi
 $ESUDO chmod 666 /dev/tty0
 printf "\033c" > /dev/tty0
 echo "Loading... Please Wait." > /dev/tty0
+show_load_status() {
+  printf '%s\n' "$1" > /dev/tty0
+  echo "[loading] $1"
+}
+show_load_status "正在准备运行环境..."
 
 bind_directories ~/.config/StardewValley "$gamedir/savedata"
 
 modsdir="$gamedir/Mods"
+runtime_root="$gamedir/.rgds-runtime"
+runtime_modsdir="$runtime_root/Mods"
+mods_state_path="$runtime_root/mod-state.json"
 smapi_bundle_dir="$gamedir/tools/SMAPIBundle"
 smapi_game_root="$smapi_bundle_dir/game-root"
 smapi_default_mods_dir="$smapi_bundle_dir/default-mods"
@@ -158,11 +166,10 @@ smapi_patch_path="$gamedir/dlls/StardewPatches.dll"
 patcher_args=(
   --game-dir "$gamedir/gamedata"
   --overlay-dir "$gamedir/overrides/gamedata"
-  --mods-dir "$modsdir"
 )
 
 if [ "$launch_mode" = "smapi" ]; then
-  sdv_smapi_sync_default_mods "$smapi_default_mods_dir" "$modsdir"
+  show_load_status "正在扫描 MOD..."
   entry_assembly="StardewModdingAPI.dll"
   smapi_patch_path="$gamedir/gamedata/smapi-internal/StardewPatches.dll"
   patcher_args+=(
@@ -219,36 +226,76 @@ if [ ! -f "$gamedir/gamedata/Stardew Valley.deps.json" ] || [ ! -f "$gamedir/gam
   exit 1
 fi
 
+export MONOGAME_PATCH="$smapi_patch_path"
+if [ "$launch_mode" = "smapi" ]; then
+  if ! python3 "$gamedir/tools/rgds-mod-state.py" --mods "$modsdir" --state-file "$mods_state_path"; then
+    echo "[mods] Could not validate queued choices; retaining the current MOD selection."
+  fi
+  compat_mode="${SDV_MOD_COMPAT_MODE:-auto}"
+  compat_resizer="$gamedir/tools/ModCompatResizer/RGDSplus.ModCompatResizer.dll"
+  compat_args=(--mods "$modsdir" --runtime "$runtime_modsdir" --defaults "$smapi_default_mods_dir" --state-file "$mods_state_path")
+  [ "$compat_mode" = "off" ] && compat_args+=(--mode off)
+  show_load_status "正在检查肖像 MOD 并准备兼容资源..."
+  if [ ! -f "$compat_resizer" ]; then
+    echo "[mod-compat] Packaged low-memory image resizer is missing; refusing an unsafe SMAPI launch."
+    exit 1
+  fi
+  if python3 "$gamedir/tools/rgds-mod-compat.py" "${compat_args[@]}" --resizer "$compat_resizer"; then
+    show_load_status "正在构建 MOD 兼容运行目录..."
+    patcher_args+=(--mods-dir "$runtime_modsdir")
+    export SMAPI_MODS_PATH="$runtime_modsdir"
+  else
+    echo "[mod-compat] Private runtime build failed; refusing to launch an unpatched MOD set."
+    exit 1
+  fi
+  export RGDSPLUS_USER_MODS_PATH="$modsdir"
+  export RGDSPLUS_RUNTIME_MODS_PATH="${SMAPI_MODS_PATH:-$modsdir}"
+  export RGDSPLUS_MOD_STATE_PATH="$mods_state_path"
+  export SMAPI_USE_CURRENT_SHELL=true
+else
+  unset SMAPI_MODS_PATH
+  unset SMAPI_USE_CURRENT_SHELL
+  unset RGDSPLUS_USER_MODS_PATH RGDSPLUS_RUNTIME_MODS_PATH RGDSPLUS_MOD_STATE_PATH
+fi
+
+show_load_status "正在检查游戏文件并准备启动..."
 if ! "$DOTNET_ROOT/dotnet" "$gamedir/tools/MainlineGameDataPatcher/MainlineGameDataPatcher.dll" "${patcher_args[@]}"; then
   cat "${gamedir}/log.txt" > /dev/tty0
   sleep 5
   exit 1
 fi
-
-export MONOGAME_PATCH="$smapi_patch_path"
-if [ "$launch_mode" = "smapi" ]; then
-  if ! python3 "$gamedir/tools/rgds-mod-state.py" --mods "$modsdir"; then
-    echo "[mods] Could not apply queued choices; retaining the current MOD folders."
-  fi
-  export SMAPI_MODS_PATH="$modsdir"
-  export SMAPI_USE_CURRENT_SHELL=true
-else
-  unset SMAPI_MODS_PATH
-  unset SMAPI_USE_CURRENT_SHELL
-fi
+show_load_status "正在准备游戏数据..."
 
 cd "$gamedir/gamedata"
+
+# Leave RAM for the firmware and graphics driver on the 1 GiB handheld.
+# .NET environment limits use hexadecimal bytes; these apply only to this game.
+if [ "$(awk '/MemTotal:/ {print $2}' /proc/meminfo)" -le 1200000 ]; then
+  export DOTNET_GCHeapHardLimit="${DOTNET_GCHeapHardLimit:-10000000}"
+  export DOTNET_GCConserveMemory="${DOTNET_GCConserveMemory:-9}"
+fi
 
 $GPTOKEYB "$DOTNET_ROOT/dotnet" &
 gptokeyb_pid=$!
 command -v pm_platform_helper >/dev/null 2>&1 && pm_platform_helper "$DOTNET_ROOT/dotnet"
 while :; do
+  show_load_status "正在启动游戏，请稍候..."
   "$DOTNET_ROOT/dotnet" "$entry_assembly" &
   game_pid=$!
   if [ -n "$session_path" ]; then printf '%s\n' "$game_pid" >"$session_path.game.pid"; fi
   wait "$game_pid"
   game_status=$?
   echo "Stardew Valley exited with status ${game_status}."
+  if [ "$game_status" -ne 0 ]; then
+    echo "[crash-diagnostics] Recent memory state:"
+    awk '/MemTotal:|MemAvailable:|SwapTotal:|SwapFree:/ {print}' /proc/meminfo
+    echo "[crash-diagnostics] Recent kernel OOM/segfault records:"
+    dmesg 2>/dev/null | grep -iE 'out of memory|oom-kill|killed process|segfault' | tail -12 || true
+    echo "[crash-diagnostics] SMAPI log candidates:"
+    for candidate in "$gamedir/gamedata/SMAPI-latest.txt" "$gamedir/gamedata/SMAPI-crash.txt" "$HOME/.config/StardewValley/ErrorLogs"; do
+      [ ! -e "$candidate" ] || ls -ld "$candidate"
+    done
+  fi
   # Only a normal exit plus an explicit request from this exact child restarts.
   # MOD choices apply once above, so returning to title retains this session's set.
   if [ "$game_status" -ne 0 ] || [ -z "$session_path" ] ||

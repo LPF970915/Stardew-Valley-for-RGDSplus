@@ -72,7 +72,8 @@ def main():
     ssh = paramiko.SSHClient()
     ssh.load_system_host_keys()
     ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
-    ssh.connect("[device-host]", username="root", password=os.environ["RGDSPLUS_SSH_PASSWORD"], timeout=15)
+    ssh.connect(os.environ.get("RGDSPLUS_SSH_HOST", "rgdsplus.local"), username="root",
+                password=os.environ["RGDSPLUS_SSH_PASSWORD"], timeout=15)
     ftp = ssh.open_sftp()
     pid = None
     deployed = False
@@ -187,7 +188,8 @@ def main():
             if run("sha256sum '" + dll_path + ".perf-next'").split()[0] != hashlib.sha256(args.experiment_dll.read_bytes()).hexdigest():
                 raise RuntimeError("Experimental DLL upload hash mismatch")
             ftp.posix_rename(dll_path + ".perf-next", dll_path)
-        metadata = {"entry": ENTRY, "game": GAME, "host": "[device-host]", "localStamp": stamp,
+        metadata = {"entry": ENTRY, "game": GAME,
+                    "host": os.environ.get("RGDSPLUS_SSH_HOST", "rgdsplus.local"), "localStamp": stamp,
                     "worldSeconds": args.seconds, "pageSeconds": args.page_seconds, "repeats": args.repeats,
                     "smoke": args.smoke, "productionDllSha256": dll_before,
                     "probeSha256": hashlib.sha256((ROOT / "tools/performance-probe/bin/Release/net6.0/PerformanceProbe.dll").read_bytes()).hexdigest(),

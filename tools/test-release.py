@@ -39,6 +39,18 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(manifest["fixedUpdateRate"], 60)
         self.assertTrue(manifest["verticalSync"])
         self.assertTrue(manifest["firstUseWarmup"])
+        self.assertTrue(manifest["modCompatibility"]["sourceModsUnchanged"])
+        self.assertTrue(manifest["modCompatibility"]["steamAssetsUnchanged"])
+        self.assertEqual(manifest["modCompatibility"]["runtimeDirectory"], ".rgds-runtime/Mods")
+        self.assertEqual(manifest["modCompatibility"]["targetUniqueIds"],
+                         ["OO.Portraits", "OO.Portraits2", "Mud.SkimpyPortraits", "Mud.SkimpyPortraits2"])
+        self.assertEqual(manifest["modCompatibility"]["pngThreshold"], 512)
+        self.assertEqual(manifest["modCompatibility"]["scale"], 0.125)
+        self.assertEqual(manifest["modCompatibility"]["rulesVersion"], 9)
+        self.assertTrue(manifest["modCompatibility"]["fromAreaCoordinatesScaled"])
+        self.assertTrue(manifest["modCompatibility"]["ambiguousFromAreaSourceImagesPreserved"])
+        self.assertEqual(manifest["modCompatibility"]["portraitAntialias"], "box-prefilter-point-clamp")
+        self.assertEqual(manifest["modCompatibility"]["loadingOverlay"], "launcher-game-runner-and-smapi-load-stage")
         self.assertEqual(manifest["performanceValidation"],
                          "first-use-passed-long-run-unresolved-manual-test-requested")
         self.assertIn(release.APP + "steam-import/Import Steam Assets.ps1", files)
@@ -183,6 +195,34 @@ class ReleaseTests(unittest.TestCase):
                                     capture_output=True, text=True, encoding="utf-8", errors="replace")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("LEGACY WIDTH=2048 HEIGHT=768", result.stdout)
+
+    def test_private_runtime_preserves_source_and_passes_smapi_path(self):
+        with tempfile.TemporaryDirectory(prefix="sdv-runtime-launch-") as tmp:
+            base = Path(tmp)
+            game = base / "Stardew Valley for RGDSplus"
+            game.mkdir()
+            mods = game / "Mods"
+            mods.mkdir()
+            user_mod = mods / "UserMod"
+            user_mod.mkdir()
+            (user_mod / "manifest.json").write_text(json.dumps({"UniqueID": "User.Mod", "Name": "User Mod", "Version": "1.0.0"}), encoding="utf-8")
+            (user_mod / "asset.txt").write_text("source remains", encoding="utf-8")
+            runtime = game / ".rgds-runtime/Mods"
+            state_file = game / ".rgds-runtime/mod-state.json"
+            state_file.parent.mkdir()
+            state_file.write_text(json.dumps({"User.Mod": False}), encoding="utf-8")
+            spec = importlib.util.spec_from_file_location("compat", ROOT / "port/stardewvalleymainline/tools/rgds-mod-compat.py")
+            compat = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(compat)
+            compat.build_runtime(mods, runtime, state_file=state_file)
+            self.assertTrue((user_mod / "manifest.json").exists())
+            self.assertFalse((mods / ".rgds-disabled--UserMod").exists())
+            self.assertFalse((runtime / "UserMod").exists())
+            self.assertEqual(list(mods.iterdir()), [user_mod])
+            script = (ROOT / "port/StardewValleyMainline.sh").read_text(encoding="utf-8")
+            self.assertIn('export SMAPI_MODS_PATH="$runtime_modsdir"', script)
+            self.assertIn('export RGDSPLUS_USER_MODS_PATH="$modsdir"', script)
+            self.assertIn('RGDSPLUS_MOD_STATE_PATH="$mods_state_path"', script)
 
 
 if __name__ == "__main__":

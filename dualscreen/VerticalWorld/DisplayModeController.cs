@@ -391,6 +391,10 @@ namespace Rgdsplus.VerticalWorld
         }
         private static void OnMenuChanged(object sender, MenuChangedEventArgs e)
         {
+            if (Expanded && e.NewMenu is ShopMenu shop)
+                ShopMenuLayout.Refresh(shop);
+            else if (Expanded && e.OldMenu is ShopMenu)
+                ShopMenuLayout.RefreshAfterShop(e.NewMenu);
             if (e.NewMenu == null && (e.OldMenu is DashboardMenu || ReferenceEquals(e.OldMenu, ownedPage))) GateHeldButtons();
             if (!ReferenceEquals(e.OldMenu, ownedPage) || ownedPage == null) return;
             if (e.NewMenu is GameMenu && e.OldMenu is GameMenu) { ownedPage = e.NewMenu; return; }

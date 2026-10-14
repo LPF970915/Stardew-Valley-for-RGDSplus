@@ -294,6 +294,17 @@ foreach (float scale in new[] { .75f, 1f, 1.25f, 1.5f })
     }
 }
 Console.WriteLine("PASS: 150% default/shared preference, 192 native item centers and three-tab rail/status geometry across 75%-150% UI.");
+var shopLayout = assembly.GetType("Rgdsplus.VerticalWorld.ShopMenuLayout", true);
+var fitShopScale = shopLayout.GetMethod("FitScale", hiddenStatic);
+foreach (float requested in new[] { .56f, .75f, 1f, 1.5f })
+{
+    float fitted = (float)fitShopScale.Invoke(null, new object[] { requested, 1024, 768, 48 });
+    int logicalWidth = (int)Math.Ceiling(1024d / fitted);
+    int requiredWidth = 1000 + 48 * 2 + 120 + 24;
+    Check(fitted <= requested && logicalWidth >= requiredWidth,
+        "Shop menu side controls exceed the lower viewport at requested scale " + requested);
+}
+Console.WriteLine("PASS: native shop list, currency box, close button, and scroll controls fit the lower viewport at supported UI scales.");
 var dashboardMenuType = assembly.GetType("Rgdsplus.VerticalWorld.DashboardMenu", true);
 var dashboardMenu = Blank(dashboardMenuType);
 dashboard.GetField("ScrollRow", hiddenStatic).SetValue(null, 0);
@@ -350,6 +361,11 @@ Check(!(bool)canSwitch.Invoke(null, new[] { Blank(gameAssembly.GetType("StardewV
 Check((bool)canSwitch.Invoke(null, new[] { Blank(gameAssembly.GetType("StardewValley.Menus.DialogueBox", true)) }), "Dialogue cannot be preserved during a layout switch");
 
 var route = assembly.GetType("Rgdsplus.VerticalWorld.DialogueRouting", true);
+var shouldRouteLegacy = route.GetMethod("ShouldRouteLegacy", hiddenStatic);
+Check(!(bool)shouldRouteLegacy.Invoke(null, new object[] { true, Blank(gameAssembly.GetType("StardewValley.Menus.DialogueBox", true)) }),
+    "Active DialogueBox was scheduled for a second legacy draw");
+Check((bool)shouldRouteLegacy.Invoke(null, new object[] { true, null }),
+    "Expanded legacy dialogue without an active menu was suppressed");
 var textureType = gameType.GetProperty("uiScreen").PropertyType;
 var lowerTarget = Blank(textureType);
 var upperTarget = Blank(textureType);
@@ -563,3 +579,92 @@ foreach(float scale in new[] {.75f,1f,1.25f,1.5f})
     Check(lw+64<=vw && lh+64<=vh && lw>=800 && lh>=500,"Letter bounds exceed the viewport or become unreadable");
 }
 Console.WriteLine("PASS: mail geometry fits at all supported UI scales with room for close and attachment controls.");
+
+// Optional integration test uses an installed DDF assembly read-only.
+var ddfFile = Directory.EnumerateFiles(Path.Combine(root, "mod"), "DialogueDisplayFramework.dll", SearchOption.AllDirectories).FirstOrDefault();
+if (ddfFile != null)
+{
+    var ddf = AssemblyLoadContext.Default.LoadFromAssemblyPath(ddfFile);
+    var adapter = assembly.GetType("Rgdsplus.VerticalWorld.PortraitCompatibility", true);
+    adapter.GetMethod("Install", hiddenStatic).Invoke(null, null);
+    Check(adapter.GetField("getData", hiddenStatic).GetValue(null) != null, "Optional DDF hooks failed to install");
+    var dataType = ddf.GetType("DialogueDisplayFramework.DialogueDisplayData", true);
+    object Make(string name) => Activator.CreateInstance(ddf.GetType("DialogueDisplayFramework." + name, true));
+    void Put(object item, string field, object value) => item.GetType().GetField(field).SetValue(item, value);
+    object Read(object item, string field) => item.GetType().GetField(field).GetValue(item);
+    var fit = adapter.GetMethod("FitData", hiddenStatic).MakeGenericMethod(dataType);
+    foreach (var tile in new[] { (150, 150), (250, 250), (250, 450) })
+    {
+        var original = Make("DialogueDisplayData");
+        var portrait = Make("PortraitData");
+        Put(original, "packName", "Mud.SkimpyPortraitsCP");
+        Put(original, "width", 900); Put(original, "xOffset", 508);
+        Put(portrait, "w", tile.Item1); Put(portrait, "h", tile.Item2);
+        Put(portrait, "xOffset", -900); Put(portrait, "yOffset", -1736);
+        Put(original, "portrait", portrait); Put(original, "dialogue", Make("DialogueData"));
+        foreach (float scale in new[] { .75f, 1f, 1.25f, 1.5f, .75f })
+        {
+            optionsType.GetField("baseUIScale").SetValue(options, scale);
+            object[] call = { original }; fit.Invoke(null, call);
+            var result = call[0]; var p = Read(result, "portrait"); var t = Read(result, "dialogue");
+            int w = (int)Read(result, "width"), h = (int)Read(result, "height");
+            float s = (float)Read(p, "scale");
+            Check((int)Read(p, "xOffset") >= 0 && (int)Read(p, "yOffset") >= 0, "Portrait begins offscreen");
+            Check((int)Read(p, "xOffset") + tile.Item1 * s < (int)Read(t, "xOffset"), "Portrait overlaps dialogue text");
+            Check((int)Read(p, "yOffset") + tile.Item2 * s <= h - 56, "Portrait overlaps name or is cropped");
+            Check((int)Read(t, "xOffset") + (int)Read(t, "width") < w, "Text exceeds dialogue frame");
+            Check((int)Read(original, "xOffset") == 508 && (int)Read(portrait, "xOffset") == -900, "DDF source cache mutated");
+            Check((int)Read(p, "w") == tile.Item1 && (int)Read(p, "h") == tile.Item2, "Repeated fitting changes tile dimensions");
+        }
+    }
+    Console.WriteLine("PASS: actual DDF optional patches install; square/tall portraits and text fit 75%-150% without mutating DDF source layouts.");
+}
+
+var loadingOverlay = assembly.GetType("Rgdsplus.VerticalWorld.LoadingOverlay", true);
+var loadProgress = loadingOverlay.GetMethod("ProgressForStage", hiddenStatic);
+var keepSaveOverlay = loadingOverlay.GetMethod("ShouldKeepSaveOverlay", hiddenStatic);
+var hideOnWorldReady = loadingOverlay.GetMethod("ShouldHideForWorldReady", hiddenStatic);
+var titleSettled = loadingOverlay.GetMethod("StartupTitleSettled", hiddenStatic);
+var smapiAssembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(
+    Path.Combine(root, "port/stardewvalleymainline/tools/SMAPIBundle/game-root/StardewModdingAPI.dll"));
+var loadStageType = smapiAssembly.GetType("StardewModdingAPI.Enums.LoadStage", true);
+float LoadProgress(string name) => (float)loadProgress.Invoke(null,
+    new[] { Enum.Parse(loadStageType, name) });
+Check(LoadProgress("SaveParsed") < LoadProgress("SaveLoadedBasicInfo")
+    && LoadProgress("SaveLoadedBasicInfo") < LoadProgress("SaveAddedLocations")
+    && LoadProgress("SaveAddedLocations") < LoadProgress("SaveLoadedLocations")
+    && LoadProgress("SaveLoadedLocations") < LoadProgress("Preloaded")
+    && LoadProgress("Preloaded") < LoadProgress("Ready"),
+    "Save-loading progress stages are not monotonic");
+Check(LoadProgress("CreatedBasicInfo") < LoadProgress("CreatedInitialLocations")
+    && LoadProgress("CreatedInitialLocations") < LoadProgress("CreatedLocations")
+    && LoadProgress("CreatedLocations") < LoadProgress("CreatedSaveFile"),
+    "New-game progress stages are not monotonic");
+Check((bool)keepSaveOverlay.Invoke(null, new object[] { Enum.Parse(loadStageType, "Loaded"), true })
+    && (bool)keepSaveOverlay.Invoke(null, new object[] { Enum.Parse(loadStageType, "Ready"), true })
+    && !(bool)keepSaveOverlay.Invoke(null, new object[] { Enum.Parse(loadStageType, "Ready"), false }),
+    "Save overlay hides before SaveLoaded or remains active outside save loading");
+Check(!(bool)hideOnWorldReady.Invoke(null, new object[] { true, true, true, Enum.Parse(loadStageType, "Ready") })
+    && !(bool)hideOnWorldReady.Invoke(null, new object[] { true, false, true, Enum.Parse(loadStageType, "CreatedLocations") })
+    && !(bool)hideOnWorldReady.Invoke(null, new object[] { false, false, true, Enum.Parse(loadStageType, "Ready") })
+    && (bool)hideOnWorldReady.Invoke(null, new object[] { true, false, true, Enum.Parse(loadStageType, "Ready") })
+    && (bool)hideOnWorldReady.Invoke(null, new object[] { true, false, false, Enum.Parse(loadStageType, "None") }),
+    "Startup/save overlay world-ready hide policy is incorrect");
+var beginLoadingTest = loadingOverlay.GetMethod("BeginTest", hiddenStatic);
+var onSaveLoaded = loadingOverlay.GetMethod("OnSaveLoaded", BindingFlags.Static | BindingFlags.NonPublic);
+var overlayStatus = loadingOverlay.GetMethod("Status", hiddenStatic);
+beginLoadingTest.Invoke(null, new object[] { true });
+onSaveLoaded.Invoke(null, Array.Empty<object>());
+var endedSaveOverlay = overlayStatus.Invoke(null, Array.Empty<object>());
+Check(!(bool)endedSaveOverlay.GetType().GetProperty("visible").GetValue(endedSaveOverlay),
+    "Save overlay remains visible after SaveLoaded");
+Check(!(bool)titleSettled.Invoke(null, new object[] { 1000L, 3499L })
+    && (bool)titleSettled.Invoke(null, new object[] { 1000L, 3500L })
+    && !(bool)titleSettled.Invoke(null, new object[] { 0L, 100000L }),
+    "Startup overlay title settle timing is not enforced");
+var detailFactor = assembly.GetType("Rgdsplus.VerticalWorld.PortraitTextureCache", true)
+    .GetMethod("DetailDownsampleFactor", hiddenStatic);
+int DetailFactor(int width, int height) => (int)detailFactor.Invoke(null, new object[] { width, height });
+Check(DetailFactor(600, 600) == 2 && DetailFactor(1000, 1800) == 4
+    && DetailFactor(2400, 2400) == 4, "Detailed portrait prefilter factor is incorrect");
+Console.WriteLine("PASS: loading status advances through real SMAPI stages; oversized detailed portraits are box-prefiltered before point-sampled rendering.");

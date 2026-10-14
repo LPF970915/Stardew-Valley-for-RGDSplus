@@ -1,112 +1,89 @@
-"""Apply queued MOD choices before SMAPI loads any mod or resources."""
+"""Validate queued MOD choices without changing the user's MOD directory.
+
+The launcher applies these choices while building its private runtime copy.
+This helper intentionally performs no rename, copy, or deletion in ``Mods``.
+"""
 import argparse
 import json
 from pathlib import Path
 import re
 
-PREFIX = ".rgds-disabled--"
 LOCKED = {s.casefold() for s in ("RGDSplus.VerticalWorld", "SMAPI.ConsoleCommands", "SMAPI.SaveBackup",
-                               "RGDSplus.PerformanceProbe", "RGDSplus.RenderScaleProbe")}
+                                  "RGDSplus.PerformanceProbe", "RGDSplus.RenderScaleProbe")}
 
 
 def read_json(path):
-    # Match strings first so comments and trailing commas inside strings survive.
     text = path.read_text(encoding="utf-8-sig")
     text = re.sub(r'("(?:\\.|[^"\\])*")|(/\*[\s\S]*?\*/|//[^\r\n]*)', lambda m: m[1] or "", text)
     text = re.sub(r'("(?:\\.|[^"\\])*")|(,\s*(?=[}\]]))', lambda m: m[1] or "", text)
     return json.loads(text)
 
 
-def fields(value):
-    return {k.casefold(): v for k, v in value.items()}
-
-
 def scan(root):
     mods = {}
+    warnings = []
 
     def visit(folder, depth):
-        if depth > 8 or folder.is_symlink():
+        if depth > 8 or folder.is_symlink() or (depth and (
+                (folder.name.startswith(".") and not folder.name.startswith(".rgds-disabled--"))
+                or folder.name.startswith("RGDSplus.ModCompatibility--"))):
             return
-        if depth and folder.name.startswith(".") and not folder.name.startswith(PREFIX):
+        try:
+            paths = sorted(folder.iterdir(), key=lambda path: path.name.casefold())
+        except OSError as error:
+            warnings.append(f"{folder.name}: {error}")
             return
-        paths = list(folder.iterdir())
         manifest = next((p for p in paths if p.name.casefold() == "manifest.json" and p.is_file()), None)
         if manifest:
-            if manifest.is_symlink():
-                raise ValueError("Symlink manifest: " + str(manifest))
-            data = fields(read_json(manifest))
-            identifier = data.get("uniqueid", "").casefold()
-            if not identifier or identifier in mods:
-                raise ValueError("Missing or duplicate mod ID: " + str(folder))
-            dependencies = [fields(d)["uniqueid"].casefold() for d in data.get("dependencies", [])
-                            if fields(d).get("isrequired", True)]
-            if data.get("contentpackfor"):
-                dependencies.append(fields(data["contentpackfor"])["uniqueid"].casefold())
-            mods[identifier] = dict(path=folder, enabled=not folder.name.startswith(PREFIX), required=dependencies)
+            try:
+                data = read_json(manifest)
+                identifier = str(next((v for k, v in data.items() if k.casefold() == "uniqueid"), "")).strip()
+            except (OSError, ValueError, TypeError, AttributeError):
+                identifier = ""
+            if not identifier:
+                warnings.append(f"{folder.name}: missing or invalid manifest UniqueID")
+            elif identifier.casefold() in mods:
+                warnings.append(f"duplicate UniqueID skipped: {identifier}")
+            else:
+                mods[identifier.casefold()] = {"path": str(folder), "enabled": not folder.name.startswith(".")}
             return
         for child in paths:
             if child.is_dir():
                 visit(child, depth + 1)
 
-    visit(root, 0)
-    return mods
+    visit(Path(root), 0)
+    return mods, warnings
 
 
-def apply(root):
+def validate(root, state_file):
     root = Path(root).resolve(strict=True)
-    state = root / ".rgds-mod-state.json"
-    if not state.exists():
-        return dict(applied=True, changed=[])
+    state = Path(state_file)
     if state.is_symlink():
         raise ValueError("Symlink state file")
+    state = state.resolve()
+    if not state.exists():
+        return {"applied": True, "changed": [], "warnings": [], "mods": 0}
     choices = read_json(state)
-    if not isinstance(choices, dict) or any(type(v) is not bool for v in choices.values()):
+    if not isinstance(choices, dict) or any(type(value) is not bool for value in choices.values()):
         raise ValueError("Invalid mod choices")
-    choices = {k.casefold(): v for k, v in choices.items()}
-    mods = scan(root)
-    desired = {key: True if key in LOCKED else choices.get(key, mod["enabled"]) for key, mod in mods.items()}
-    plan = []
-    for key, mod in mods.items():
-        if desired[key]:
-            missing = [dep for dep in mod["required"] if not desired.get(dep, False)]
-            if missing:
-                raise ValueError(key + " requires " + ", ".join(missing))
-        if desired[key] == mod["enabled"]:
-            continue
-        old = mod["path"]
-        name = old.name[len(PREFIX):] if desired[key] else PREFIX + old.name
-        if not name or name in (".", "..") or name.startswith(".") and desired[key]:
-            raise ValueError("Invalid mod folder name")
-        new = old.with_name(name)
-        if new.exists() or new.is_symlink():
-            raise ValueError("Target already exists: " + str(new))
-        if not old.resolve().is_relative_to(root) or new.parent.resolve() != old.parent.resolve():
-            raise ValueError("Mod path outside root")
-        plan.append((old, new))
-    moved = []
-    try:
-        for old, new in plan:
-            old.rename(new)
-            moved.append((old, new))
-    except Exception:
-        for old, new in reversed(moved):
-            new.rename(old)
-        raise
-    return dict(applied=True, changed=[dict(before=str(a.relative_to(root)), after=str(b.relative_to(root))) for a, b in moved])
+    mods, warnings = scan(root)
+    unknown = [key for key in choices if str(key).casefold() not in mods and str(key).casefold() not in LOCKED]
+    warnings.extend("choice has no installed MOD: " + str(key) for key in unknown)
+    for key in LOCKED:
+        if key in choices and choices[key] is False:
+            warnings.append("locked component remains enabled: " + key)
+    return {"applied": True, "changed": [], "warnings": warnings, "mods": len(mods)}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mods", type=Path, required=True)
+    parser.add_argument("--state-file", type=Path, required=True)
     args = parser.parse_args()
     try:
-        result = apply(args.mods)
+        result = validate(args.mods, args.state_file)
     except Exception as error:
-        result = dict(applied=False, error=str(error), changed=[])
-    report = args.mods / ".rgds-mod-result.json"
-    temporary = report.with_suffix(".next")
-    temporary.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-    temporary.replace(report)
+        result = {"applied": False, "error": str(error), "changed": []}
     print("[mods] " + json.dumps(result, ensure_ascii=False))
     return 0 if result["applied"] else 1
 

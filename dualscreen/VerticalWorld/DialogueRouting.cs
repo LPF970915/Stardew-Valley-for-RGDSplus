@@ -50,13 +50,18 @@ namespace Rgdsplus.VerticalWorld
         private static void LegacyPrefix(out RouteState __state)
         {
             __state = null;
-            if (!DisplayModeController.Expanded) return;
+            // In ExpandedHud the active DialogueBox is drawn exactly once by
+            // DrawMenu, which is routed by MenuPrefix. Game1.drawDialogueBox
+            // may still be reached by the legacy dialogue path in the same
+            // frame; routing it as well duplicates the portrait and box.
+            if (!ShouldRouteLegacy(DisplayModeController.Expanded, Game1.activeClickableMenu)) return;
             __state = Capture(true);
             // The legacy dialogue is called inside an existing deferred SpriteBatch.
             Game1.spriteBatch.End();
             Game1.graphics.GraphicsDevice.SetRenderTarget(VerticalWorldRenderer.UpperUi);
             BeginBatch();
         }
+        internal static bool ShouldRouteLegacy(bool expanded, IClickableMenu menu) => expanded && !(menu is DialogueBox);
         private static void BeginBatch() => Game1.spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
         private static Exception RouteFinalizer(RouteState __state, Exception __exception)
         {

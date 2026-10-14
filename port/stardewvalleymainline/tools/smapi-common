@@ -48,7 +48,7 @@ sdv_smapi_has_user_mods() {
 
     entry_name="$(basename "$entry")"
     case "$entry_name" in
-      .gitkeep|.*)
+      .gitkeep|.*|RGDSplus.ModCompatibility--*)
         continue
         ;;
       ConsoleCommands|SaveBackup)
